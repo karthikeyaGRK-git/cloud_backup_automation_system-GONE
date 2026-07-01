@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>CloudBackup Pro — Azure Edition</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.8.0/umd/Recharts.js"></script>
+<style>
+:root{
+  --bg:#060a12; --bg-s:#0c1120; --bg-c:#111927; --bg-ch:#172034;
+  --bg-in:#080d18; --bg-az:#0a1428;
+  --blue:#0078d4; --blue2:#106ebe; --blue-dim:rgba(0,120,212,.18);
+  --blue-glow:rgba(0,120,212,.35);
+  --az-blue:#0078d4; --az-light:#50e6ff; --az-purple:#5c2d91;
+  --green:#10b981; --green-dim:rgba(16,185,129,.18);
+  --amber:#f59e0b; --amber-dim:rgba(245,158,11,.18);
+  --red:#ef4444;   --red-dim:rgba(239,68,68,.18);
+  --t1:#eef4ff; --t2:#7fa5d8; --t3:#2e4a72;
+  --border:#0f1e35; --border2:#172a45;
+  --r-sm:7px; --r-md:12px; --r-lg:18px;
+  --shadow:0 8px 36px rgba(0,0,0,.6);
+  --font:'Inter',system-ui,sans-serif;
+  --mono:'JetBrains Mono','Consolas',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%}
+body{font-family:var(--font);background:var(--bg);color:var(--t1);overflow-x:hidden;-webkit-font-smoothing:antialiased}
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
+::-webkit-scrollbar-thumb:hover{background:var(--az-blue)}
+
+/* Layout */
+.shell{display:flex;height:100vh;overflow:hidden}
+.sidebar{width:236px;min-width:236px;background:var(--bg-s);border-right:1px solid var(--border);display:flex;flex-direction:column;z-index:100}
+.main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.topbar{height:60px;background:var(--bg-s);border-bottom:1px solid var(--border);padding:0 26px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.page{padding:28px;flex:1}
+
+/* Sidebar */
+.sb-logo{padding:20px 16px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border)}
+.logo-ico{width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo-txt{font-size:15px;font-weight:800;letter-spacing:-.3px;line-height:1.2}
+.logo-txt span{color:var(--az-blue)}
+.logo-sub{font-size:10px;color:var(--t3);font-weight:500;letter-spacing:.3px}
+.sb-sec{padding:14px 14px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:var(--t3)}
+.nav{display:flex;align-items:center;gap:9px;padding:9px 10px;margin:2px 8px;border-radius:var(--r-sm);cursor:pointer;font-size:13px;font-weight:500;color:var(--t2);transition:all .13s;border:none;background:none;width:calc(100% - 16px);text-align:left}
+.nav:hover{background:var(--bg-c);color:var(--t1)}
+.nav.active{background:var(--blue-dim);color:var(--az-blue)}
+.sb-foot{margin-top:auto;padding:14px;border-top:1px solid var(--border)}
+.urow{display:flex;align-items:center;gap:9px;padding:9px;border-radius:var(--r-sm)}
+.urow:hover{background:var(--bg-c)}
+.av{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;flex-shrink:0}
+.un{font-size:13px;font-weight:600}
+.up{font-size:10.5px;color:var(--t3);text-transform:capitalize}
+
+/* Cards */
+.card{background:var(--bg-c);border:1px solid var(--border);border-radius:var(--r-lg)}
+.card:hover{border-color:var(--border2)}
+.az-card{background:linear-gradient(135deg,rgba(0,120,212,.12),rgba(92,45,145,.08));border:1px solid rgba(0,120,212,.25);border-radius:var(--r-lg)}
+
+/* Grid */
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+
+/* Stat cards */
+.stat{padding:20px 22px}
+.s-lbl{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px}
+.s-val{font-size:28px;font-weight:800;letter-spacing:-.5px;line-height:1}
+.s-sub{font-size:12px;color:var(--t3);margin-top:6px}
+.s-ico{width:38px;height:38px;border-radius:var(--r-sm);display:flex;align-items:center;justify-content:center}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:7px;padding:9px 17px;border-radius:var(--r-sm);font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .13s;white-space:nowrap;font-family:var(--font)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-p{background:var(--az-blue);color:#fff}
+.btn-p:hover:not(:disabled){background:var(--blue2);box-shadow:0 0 0 3px var(--blue-glow)}
+.btn-g{background:var(--bg-c);color:var(--t2);border:1px solid var(--border)}
+.btn-g:hover:not(:disabled){background:var(--bg-ch);color:var(--t1)}
+.btn-d{background:var(--red-dim);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.btn-d:hover:not(:disabled){background:rgba(239,68,68,.3)}
+.btn-ok{background:var(--green-dim);color:var(--green);border:1px solid rgba(16,185,129,.3)}
+.btn-ok:hover:not(:disabled){background:rgba(16,185,129,.3)}
+.btn-az{background:linear-gradient(135deg,#0078d4,#5c2d91);color:#fff}
+.btn-az:hover:not(:disabled){box-shadow:0 0 0 3px rgba(0,120,212,.4)}
+.btn-sm{padding:5px 11px;font-size:12px}
+.btn-ic{padding:7px}
+.wf{width:100%;justify-content:center}
+
+/* Inputs */
+.fg{margin-bottom:16px}
+.lbl{display:block;font-size:12px;font-weight:600;color:var(--t2);margin-bottom:5px}
+.inp{width:100%;padding:9px 13px;background:var(--bg-in);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--t1);font-size:13px;outline:none;transition:border-color .13s;font-family:var(--font)}
+.inp:focus{border-color:var(--az-blue);box-shadow:0 0 0 3px var(--blue-dim)}
+.inp::placeholder{color:var(--t3)}
+.inp.err{border-color:var(--red)}
+select.inp{appearance:none;cursor:pointer}
+textarea.inp{resize:vertical}
+.err-t{font-size:11px;color:var(--red);margin-top:3px}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600}
+.b-green{background:var(--green-dim);color:var(--green)}
+.b-blue{background:var(--blue-dim);color:var(--az-blue)}
+.b-amber{background:var(--amber-dim);color:var(--amber)}
+.b-red{background:var(--red-dim);color:var(--red)}
+.b-gray{background:rgba(100,116,139,.15);color:#64748b}
+.b-azure{background:linear-gradient(135deg,rgba(0,120,212,.2),rgba(92,45,145,.2));color:var(--az-light);border:1px solid rgba(80,230,255,.2)}
+
+/* Azure service status pills */
+.az-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;background:var(--blue-dim);color:var(--az-light);border:1px solid rgba(80,230,255,.2)}
+.az-pill-off{background:rgba(100,116,139,.1);color:var(--t3);border:1px solid var(--border)}
+
+/* Table */
+.tbl-wrap{overflow-x:auto;border-radius:var(--r-lg)}
+table{width:100%;border-collapse:collapse}
+thead{background:var(--bg-in)}
+th{padding:11px 16px;text-align:left;font-size:10px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+td{padding:13px 16px;font-size:13px;color:var(--t2);border-top:1px solid var(--border)}
+tr:hover td{background:var(--bg-ch)}
+.td-p{color:var(--t1);font-weight:600}
+
+/* Progress */
+.pbar{width:100%;height:5px;background:var(--bg-in);border-radius:99px;overflow:hidden}
+.pfill{height:100%;border-radius:99px;transition:width .3s}
+
+/* Modal */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(6px);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;animation:fadein .15s}
+.modal{background:var(--bg-s);border:1px solid var(--border2);border-radius:var(--r-lg);width:100%;max-width:580px;max-height:90vh;overflow-y:auto;animation:slideup .2s}
+.m-hdr{padding:22px 26px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.m-ttl{font-size:17px;font-weight:700}
+.m-bdy{padding:22px 26px}
+.m-ftr{padding:14px 26px 22px;display:flex;gap:10px;justify-content:flex-end}
+
+/* Auth */
+.auth-shell{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:20px;position:relative;overflow:hidden}
+.auth-shell::before{content:'';position:absolute;width:600px;height:600px;border-radius:50%;background:radial-gradient(circle,rgba(0,120,212,.08),transparent 70%);top:-200px;left:-200px;pointer-events:none}
+.auth-shell::after{content:'';position:absolute;width:400px;height:400px;border-radius:50%;background:radial-gradient(circle,rgba(92,45,145,.07),transparent 70%);bottom:-100px;right:-100px;pointer-events:none}
+.auth-card{background:var(--bg-s);border:1px solid var(--border2);border-radius:var(--r-lg);padding:38px;width:100%;max-width:420px;box-shadow:var(--shadow);position:relative;z-index:1}
+.a-ttl{font-size:24px;font-weight:800;text-align:center;margin-bottom:6px}
+.a-sub{font-size:13px;color:var(--t3);text-align:center;margin-bottom:28px}
+.a-lnk{color:var(--az-blue);font-size:13px;font-weight:600;text-decoration:none;cursor:pointer}
+.a-lnk:hover{text-decoration:underline}
+
+/* Toast */
+.twrap{position:fixed;top:18px;right:18px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+.toast{background:var(--bg-c);border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px 16px;font-size:13px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow);animation:slidein .2s;min-width:270px;max-width:370px}
+.t-ok{border-left:3px solid var(--green)}
+.t-er{border-left:3px solid var(--red)}
+.t-in{border-left:3px solid var(--az-blue)}
+
+/* Azure banner */
+.az-banner{background:linear-gradient(135deg,rgba(0,120,212,.15),rgba(92,45,145,.1));border:1px solid rgba(0,120,212,.3);border-radius:var(--r-md);padding:16px 20px;display:flex;align-items:center;gap:14px;margin-bottom:24px}
+.az-banner-ico{width:40px;height:40px;border-radius:10px;background:linear-gradient(135deg,#0078d4,#5c2d91);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+/* Azure services grid */
+.az-service{background:var(--bg-az);border:1px solid rgba(0,120,212,.2);border-radius:var(--r-md);padding:16px;display:flex;flex-direction:column;gap:10px}
+.az-svc-name{font-size:13px;font-weight:700;color:var(--t1)}
+.az-svc-sub{font-size:11.5px;color:var(--t3);line-height:1.5}
+.az-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.az-dot-on{background:var(--green)}
+.az-dot-off{background:var(--t3)}
+.az-dot-sim{background:var(--amber)}
+
+/* Misc */
+.chip{display:inline-flex;align-items:center;padding:2px 9px;border-radius:99px;font-size:11px;background:var(--bg-in);color:var(--t3);border:1px solid var(--border)}
+.chip-az{background:rgba(0,120,212,.12);color:var(--az-blue);border-color:rgba(0,120,212,.3)}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--green);position:relative;flex-shrink:0}
+.pulse::before{content:'';position:absolute;inset:-3px;border-radius:50%;background:var(--green);opacity:.3;animation:pulseA 1.6s infinite}
+.spin{width:18px;height:18px;border:2px solid var(--border2);border-top-color:var(--az-blue);border-radius:50%;animation:spin .65s linear infinite}
+.loader{display:flex;align-items:center;justify-content:center;height:220px}
+.empty{text-align:center;padding:52px 20px}
+.e-ico{font-size:44px;margin-bottom:14px;opacity:.45}
+.e-ttl{font-size:17px;font-weight:700;margin-bottom:7px}
+.e-sub{font-size:13px;color:var(--t3);margin-bottom:22px}
+.divider{height:1px;background:var(--border);margin:16px 0}
+.sh{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+.sttl{font-size:20px;font-weight:800}
+.ssub{font-size:12px;color:var(--t3);margin-top:2px}
+.cht{font-size:14px;font-weight:700;margin-bottom:3px}
+.chs{font-size:11.5px;color:var(--t3);margin-bottom:16px}
+.mono{font-family:var(--mono)}
+
+/* Flex utils */
+.fx{display:flex}.fxc{flex-direction:column}
+.aic{align-items:center}.afs{align-items:flex-start}
+.jb{justify-content:space-between}.je{justify-content:flex-end}
+.g2u{gap:8px}.g3u{gap:12px}.g4u{gap:16px}
+.mt2{margin-top:8px}.mt4{margin-top:16px}.mt6{margin-top:24px}
+.mb4{margin-bottom:16px}.mb6{margin-bottom:24px}
+.p4{padding:16px}.p6{padding:24px}
+.trunc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cg{color:var(--green)}.cr{color:var(--red)}.cb{color:var(--az-blue)}.ca{color:var(--amber)}.ct2{color:var(--t2)}.ct3{color:var(--t3)}
+.fw6{font-weight:600}.fw7{font-weight:700}.fw8{font-weight:800}
+.fs11{font-size:11px}.fs12{font-size:12px}.fs13{font-size:13px}
+
+@keyframes fadein{from{opacity:0}to{opacity:1}}
+@keyframes slideup{from{transform:translateY(16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slidein{from{transform:translateX(110px);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pulseA{0%,100%{transform:scale(1);opacity:.3}50%{transform:scale(2);opacity:0}}
+
+@media(max-width:900px){.sidebar{display:none}.g4{grid-template-columns:1fr 1fr}.g3{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.g4,.g3,.g2{grid-template-columns:1fr}.page{padding:14px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  // ── SET YOUR RENDER BACKEND URL HERE ─────────────────────────────────────
+  window.BACKEND_URL = "https://your-render-backend.onrender.com";
+  // For local dev: window.BACKEND_URL = "http://localhost:5000";
+</script>
+<script type="text/babel">
+"use strict";
+const { useState, useEffect, useCallback, createContext, useContext } = React;
+const API_ROOT = (window.BACKEND_URL || "http://localhost:5000") + "/api";
+
+/* ── Toast ─────────────────────────────────────────────────────────────── */
+const ToastCtx = createContext(null);
+const ToastProvider = ({ children }) => {
+  const [list, setList] = useState([]);
+  const push = useCallback((msg, type) => {
+    const id = Date.now() + Math.random();
+    setList(p => [...p, { id, msg, type }]);
+    setTimeout(() => setList(p => p.filter(t => t.id !== id)), 4000);
+  }, []);
+  return (
+    <ToastCtx.Provider value={{ success:m=>push(m,"ok"), error:m=>push(m,"er"), info:m=>push(m,"in") }}>
+      {children}
+      <div className="twrap">
+        {list.map(t=>(
+          <div key={t.id} className={`toast t-${t.type}`}>
+            <span style={{fontWeight:800}}>{t.type==="ok"?"✓":t.type==="er"?"✕":"·"}</span>
+            <span>{t.msg}</span>
+          </div>
+        ))}
+      </div>
+    </ToastCtx.Provider>
+  );
+};
+const useToast = () => useContext(ToastCtx);
+
+/* ── API client ─────────────────────────────────────────────────────────── */
+const req = async (path, opts = {}) => {
+  const token = localStorage.getItem("token");
+  const res = await fetch(API_ROOT + path, {
+    headers: { "Content-Type":"application/json", ...(token ? { Authorization:`Bearer ${token}` } : {}) },
+    credentials: "include", ...opts,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || data.errors?.[0]?.msg || "Request failed");
+  return data;
+};
+const API = {
+  auth:  { register:d=>req("/auth/register",{method:"POST",body:d}), login:d=>req("/auth/login",{method:"POST",body:d}), logout:()=>req("/auth/logout",{method:"POST"}), me:()=>req("/auth/me"), updateProfile:d=>req("/auth/update-profile",{method:"PATCH",body:d}) },
+  jobs:  { list:(p={})=>req("/jobs?"+new URLSearchParams(p)), get:id=>req(`/jobs/${id}`), create:d=>req("/jobs",{method:"POST",body:d}), update:(id,d)=>req(`/jobs/${id}`,{method:"PATCH",body:d}), del:id=>req(`/jobs/${id}`,{method:"DELETE"}), run:id=>req(`/jobs/${id}/run`,{method:"POST"}), logs:(id,p={})=>req(`/jobs/${id}/logs?`+new URLSearchParams(p)), blobs:id=>req(`/jobs/${id}/blobs`), retention:id=>req(`/jobs/${id}/apply-retention`,{method:"POST"}) },
+  dash:  { stats:()=>req("/dashboard/stats"), activity:(p={})=>req("/dashboard/activity?"+new URLSearchParams(p)) },
+  azure: { info:()=>req("/azure/storage-info") },
+};
+
+/* ── Auth context ───────────────────────────────────────────────────────── */
+const AuthCtx = createContext(null);
+const AuthProvider = ({ children }) => {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const toast = useToast();
+  useEffect(() => {
+    if (!localStorage.getItem("token")) { setLoading(false); return; }
+    API.auth.me().then(r=>setUser(r.data.user)).catch(()=>localStorage.removeItem("token")).finally(()=>setLoading(false));
+  }, []);
+  const login    = async d => { const r=await API.auth.login(d); localStorage.setItem("token",r.token); setUser(r.data.user); toast.success(`Welcome back, ${r.data.user.name}!`); };
+  const register = async d => { const r=await API.auth.register(d); localStorage.setItem("token",r.token); setUser(r.data.user); toast.success(`Welcome, ${r.data.user.name}!`); };
+  const logout   = async () => { try{await API.auth.logout();}catch{} localStorage.removeItem("token"); setUser(null); toast.info("Signed out."); };
+  return <AuthCtx.Provider value={{user,loading,login,register,logout,setUser}}>{children}</AuthCtx.Provider>;
+};
+const useAuth = () => useContext(AuthCtx);
+
+/* ── Helpers ────────────────────────────────────────────────────────────── */
+const fmtB   = b => { if(!b)return"0 B"; const k=1024,u=["B","KB","MB","GB","TB"],i=Math.floor(Math.log(b)/Math.log(k)); return`${(b/Math.pow(k,i)).toFixed(1)} ${u[i]}`; };
+const fmtAgo = d => { if(!d)return"Never"; const s=Math.floor((Date.now()-new Date(d))/1000); if(s<60)return"Just now"; if(s<3600)return`${Math.floor(s/60)}m ago`; if(s<86400)return`${Math.floor(s/3600)}h ago`; return new Date(d).toLocaleDateString(); };
+const fmtD   = d => d?new Date(d).toLocaleString("en-US",{month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit"}):"N/A";
+const fmtMs  = ms => { if(!ms)return"N/A"; const s=Math.floor(ms/1000); return s<60?`${s}s`:`${Math.floor(s/60)}m ${s%60}s`; };
+const dotClr = s => ({active:"#10b981",completed:"#10b981",running:"#0078d4",paused:"#f59e0b",failed:"#ef4444",disabled:"#475569"}[s]||"#475569");
+
+const Badge = ({s}) => {
+  const cls = {active:"b-green",completed:"b-green",running:"b-blue",pending:"b-blue",paused:"b-amber",failed:"b-red",error:"b-red",disabled:"b-gray",cancelled:"b-gray"};
+  return <span className={`badge ${cls[s]||"b-gray"}`}>{s}</span>;
+};
+
+/* ── Azure Logo SVG ─────────────────────────────────────────────────────── */
+const AzLogo = ({ sz=20 }) => (
+  <svg width={sz} height={sz} viewBox="0 0 96 96" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="azg1" x1="-.5%" x2="100%" y1="50%" y2="50%"><stop offset="0" stopColor="#114A8B"/><stop offset="1" stopColor="#0669BC"/></linearGradient>
+      <linearGradient id="azg2" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0" stopColor="#0078D4"/><stop offset="1" stopColor="#1490DF"/></linearGradient>
+    </defs>
+    <path d="M33.34 6.54h28.67L37.66 90.48a4.56 4.56 0 01-4.33 3.15H9.81a4.56 4.56 0 01-4.29-6.07L29.01 9.7a4.56 4.56 0 014.33-3.16z" fill="url(#azg1)"/>
+    <path d="M72.3 60.36H41.46a2.1 2.1 0 00-1.42 3.63l19.86 18.49a4.59 4.59 0 003.12 1.22h17.5z" fill="#0078D4"/>
+    <path d="M33.34 6.54A4.53 4.53 0 0029 9.72L5.54 87.52a4.55 4.55 0 004.27 6.11h23.81a4.88 4.88 0 003.76-3.17l5.57-16.42 19.95 18.55a4.64 4.64 0 003.06 1.04h17.36L62.03 60.36H45.18L62.1 6.54z" fill="url(#azg2)"/>
+    <path d="M66.99 9.7A4.55 4.55 0 0062.67 6.54H33.65a4.55 4.55 0 014.32 3.16L62.32 87.56a4.55 4.55 0 004.32 3.07H90.2a4.55 4.55 0 004.32-6.07z" fill="#1F56A3"/>
+  </svg>
+);
+
+/* ── Icon system ────────────────────────────────────────────────────────── */
+const IC = {
+  dash:"M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z M9 22V12h6v10",
+  jobs:"M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z",
+  logs:"M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8",
+  az:"M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z",
+  settings:"M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z",
+  play:"M5 3l14 9-14 9V3z",plus:"M12 5v14 M5 12h14",trash:"M3 6h18 M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a1 1 0 011-1h4a1 1 0 011 1v2",
+  logout:"M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4 M16 17l5-5-5-5 M21 12H9",
+  bell:"M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.73 21a2 2 0 01-3.46 0",
+  refresh:"M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15",
+  x:"M18 6L6 18 M6 6l12 12",shield:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  activity:"M22 12h-4l-3 9L9 3l-3 9H2",storage:"M22 12H2 M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z",
+  cloud:"M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z",key:"M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4",
+  download:"M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4 M7 10l5 5 5-5 M12 15V3",search:"M11 17.25a6.25 6.25 0 110-12.5 6.25 6.25 0 010 12.5z M16 16l4.5 4.5",
+  retention:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z M9 12l2 2 4-4",
+};
+const Ico = ({n,sz=17,cl}) => (
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={cl||"currentColor"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{flexShrink:0}}>
+    {IC[n]&&<path d={IC[n]}/>}
+  </svg>
+);
+
+const Spin = ({sz=18}) => <div className="spin" style={{width:sz,height:sz}}/>;
+const Modal = ({open,onClose,title,children,footer}) => !open?null:(
+  <div className="overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div className="modal">
+      <div className="m-hdr"><div className="m-ttl">{title}</div><button className="btn btn-g btn-sm btn-ic" onClick={onClose}><Ico n="x" sz={14}/></button></div>
+      <div className="m-bdy">{children}</div>
+      {footer&&<div className="m-ftr">{footer}</div>}
+    </div>
+  </div>
+);
+
+/* ── Auth pages ─────────────────────────────────────────────────────────── */
+const Login = ({flip}) => {
+  const {login}=useAuth(); const toast=useToast();
+  const [f,setF]=useState({email:"",password:""}); const [e,setE]=useState({}); const [busy,setBusy]=useState(false);
+  const ok=()=>{const er={};if(!/\S+@\S+\.\S+/.test(f.email))er.email="Valid email required";if(!f.password)er.password="Required";setE(er);return!Object.keys(er).length};
+  const sub=async ev=>{ev.preventDefault();if(!ok())return;setBusy(true);try{await login(f);}catch(err){toast.error(err.message);}finally{setBusy(false);}};
+  return(
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div style={{textAlign:"center",marginBottom:26}}>
+          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#0078d4,#5c2d91)",marginBottom:14}}>
+            <AzLogo sz={30}/>
+          </div>
+          <div className="a-ttl">Sign in to <span className="cb">CloudBackup</span></div>
+          <div className="a-sub">Powered by Microsoft Azure</div>
+        </div>
+        <form onSubmit={sub}>
+          {[{k:"email",t:"email",l:"Email",ph:"you@company.com"},{k:"password",t:"password",l:"Password",ph:"••••••••"}].map(({k,t,l,ph})=>(
+            <div key={k} className="fg"><label className="lbl">{l}</label>
+              <input className={`inp${e[k]?" err":""}`} type={t} placeholder={ph} value={f[k]} onChange={ev=>setF(p=>({...p,[k]:ev.target.value}))}/>
+              {e[k]&&<div className="err-t">{e[k]}</div>}
+            </div>
+          ))}
+          <button type="submit" className="btn btn-az wf" disabled={busy} style={{marginTop:8}}>
+            {busy?<Spin sz={14}/>:null}{busy?"Signing in…":"Sign in with Azure"}
+          </button>
+        </form>
+        <div style={{textAlign:"center",marginTop:18,fontSize:13,color:"var(--t3)"}}>
+          No account?&nbsp;<span className="a-lnk" onClick={flip}>Create one free</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const Register = ({flip}) => {
+  const {register}=useAuth(); const toast=useToast();
+  const [f,setF]=useState({name:"",email:"",password:""}); const [e,setE]=useState({}); const [busy,setBusy]=useState(false);
+  const ok=()=>{const er={};if(f.name.length<2)er.name="Min 2 chars";if(!/\S+@\S+\.\S+/.test(f.email))er.email="Valid email";if(f.password.length<8)er.password="Min 8 chars";else if(!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(f.password))er.password="Needs upper, lower & number";setE(er);return!Object.keys(er).length};
+  const sub=async ev=>{ev.preventDefault();if(!ok())return;setBusy(true);try{await register(f);}catch(err){toast.error(err.message);}finally{setBusy(false);}};
+  return(
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div style={{textAlign:"center",marginBottom:26}}>
+          <div style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:52,height:52,borderRadius:14,background:"linear-gradient(135deg,#0078d4,#5c2d91)",marginBottom:14}}>
+            <AzLogo sz={30}/>
+          </div>
+          <div className="a-ttl">Create account</div>
+          <div className="a-sub">Get started with Azure-powered backups</div>
+        </div>
+        <form onSubmit={sub}>
+          {[{k:"name",t:"text",l:"Full name",ph:"Jane Smith"},{k:"email",t:"email",l:"Email",ph:"you@company.com"},{k:"password",t:"password",l:"Password",ph:"Min 8 chars, uppercase & number"}].map(({k,t,l,ph})=>(
+            <div key={k} className="fg"><label className="lbl">{l}</label>
+              <input className={`inp${e[k]?" err":""}`} type={t} placeholder={ph} value={f[k]} onChange={ev=>setF(p=>({...p,[k]:ev.target.value}))}/>
+              {e[k]&&<div className="err-t">{e[k]}</div>}
+            </div>
+          ))}
+          <button type="submit" className="btn btn-az wf" disabled={busy} style={{marginTop:8}}>
+            {busy?<Spin sz={14}/>:null}{busy?"Creating…":"Create account"}
+          </button>
+        </form>
+        <div style={{textAlign:"center",marginTop:18,fontSize:13,color:"var(--t3)"}}>
+          Have an account?&nbsp;<span className="a-lnk" onClick={flip}>Sign in</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+const Sidebar = ({pg,setPg}) => {
+  const {user,logout}=useAuth();
+  const navs=[{id:"dashboard",l:"Dashboard",i:"dash"},{id:"jobs",l:"Backup Jobs",i:"jobs"},{id:"logs",l:"Activity Logs",i:"logs"},{id:"azure",l:"Azure Services",i:"az"},{id:"settings",l:"Settings",i:"settings"}];
+  return(
+    <div className="sidebar">
+      <div className="sb-logo">
+        <div className="logo-ico"><AzLogo sz={20}/></div>
+        <div><div className="logo-txt">Cloud<span>Backup</span></div><div className="logo-sub">Azure Edition</div></div>
+      </div>
+      <div style={{flex:1,padding:"8px 0"}}>
+        <div className="sb-sec">Navigation</div>
+        {navs.map(n=>(
+          <button key={n.id} className={`nav${pg===n.id?" active":""}`} onClick={()=>setPg(n.id)}>
+            <Ico n={n.i} sz={16}/>{n.l}
+          </button>
+        ))}
+        <div className="sb-sec" style={{marginTop:14}}>Status</div>
+        <div className="nav" style={{cursor:"default"}}><div className="pulse"/><span className="fs13">Azure services online</span></div>
+      </div>
+      <div className="sb-foot">
+        {user&&<>
+          <div className="urow"><div className="av">{user.name?.[0]?.toUpperCase()}</div><div style={{minWidth:0}}><div className="un trunc">{user.name}</div><div className="up">{user.plan} · Azure</div></div></div>
+          <button className="nav" onClick={logout} style={{marginTop:4}}><Ico n="logout" sz={15}/>Sign out</button>
+        </>}
+      </div>
+    </div>
+  );
+};
+
+/* ── Azure service card ──────────────────────────────────────────────────── */
+const AzSvcCard = ({name,desc,status,detail}) => (
+  <div className="az-service">
+    <div className="fx jb aic"><div className="az-svc-name">{name}</div>
+      <div className={`az-dot ${status==="connected"?"az-dot-on":status==="simulated"?"az-dot-sim":"az-dot-off"}`}/>
+    </div>
+    <div className="az-svc-sub">{desc}</div>
+    <span className={status==="connected"?"az-pill":"status==='simulated'?'az-pill'":"az-pill-off"} style={status==="simulated"?{background:"rgba(245,158,11,.15)",color:"#f59e0b",border:"1px solid rgba(245,158,11,.3)"}:{}}>
+      {status}
+    </span>
+    {detail&&<div className="fs11 ct3 mono mt2 trunc">{detail}</div>}
+  </div>
+);
+
+/* ── Dashboard ───────────────────────────────────────────────────────────── */
+const DashboardPage = () => {
+  const [data,setData]=useState(null); const [busy,setBusy]=useState(true);
+  useEffect(()=>{API.dash.stats().then(r=>setData(r.data)).catch(()=>{}).finally(()=>setBusy(false));},[]);
+  if(busy) return <div className="loader"><Spin sz={30}/></div>;
+  const ov=data?.overview||{}; const az=data?.azure||{};
+  const daily=(data?.dailyActivity||[]).length?data.dailyActivity:[
+    {_id:"Mon",completed:5,failed:1,dataTransferred:1.4e9},{_id:"Tue",completed:8,failed:0,dataTransferred:2.8e9},
+    {_id:"Wed",completed:4,failed:2,dataTransferred:9e8},{_id:"Thu",completed:10,failed:1,dataTransferred:3.5e9},
+    {_id:"Fri",completed:6,failed:0,dataTransferred:2.1e9},{_id:"Sat",completed:3,failed:0,dataTransferred:7e8},{_id:"Sun",completed:7,failed:1,dataTransferred:2.4e9},
+  ];
+  const recent=data?.recentActivity||[];
+  const TT={background:"#111927",border:"1px solid #0f1e35",borderRadius:8,color:"#eef4ff",fontSize:13};
+  const stats=[
+    {l:"Total Jobs",    v:ov.totalJobs||0,                   i:"jobs",    c:"#0078d4",sub:`${ov.activeJobs||0} active`},
+    {l:"Success Rate",  v:`${ov.successRate||0}%`,            i:"shield",  c:"#10b981",sub:"Last 30 days"},
+    {l:"Blobs Stored",  v:az.blobCount||0,                   i:"storage", c:"#5c2d91",sub:`${az.storageUsedGB||0} GB used`},
+    {l:"Data Backed Up",v:`${ov.totalDataTransferredGB||0} GB`,i:"cloud", c:"#f59e0b",sub:"Azure Blob Storage"},
+  ];
+  return(
+    <div className="page">
+      <div className="sh"><div><div className="sttl">Dashboard</div><div className="ssub">Azure Blob Storage · Key Vault · App Insights</div></div>
+        <span className="chip chip-az"><AzLogo sz={12}/>&nbsp;Azure connected</span>
+      </div>
+
+      {/* Azure status banner */}
+      <div className="az-banner mb6">
+        <div className="az-banner-ico"><AzLogo sz={22}/></div>
+        <div style={{flex:1}}>
+          <div className="fw7 fs13">Microsoft Azure Integration Active</div>
+          <div className="fs12 ct3 mt2">
+            Blob Storage: <span style={{color:az.connected?"var(--green)":"var(--amber)"}}>{az.connected?"Connected":"Simulated"}</span>
+            &nbsp;·&nbsp;Account: <span className="mono">{az.storageAccount||"not configured"}</span>
+            &nbsp;·&nbsp;Container: <span className="mono">{az.containerName||"backups"}</span>
+            {az.keyVaultEnabled&&<>&nbsp;·&nbsp;Key Vault: <span style={{color:"var(--green)"}}>Active</span></>}
+            {az.insightsEnabled&&<>&nbsp;·&nbsp;App Insights: <span style={{color:"var(--green)"}}>Active</span></>}
+          </div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div className="fs12 ct3">Azure Storage</div>
+          <div className="fw7 cb">{az.storageUsedGB||0} GB</div>
+          <div className="fs11 ct3">of {az.storageLimitGB||10} GB</div>
+        </div>
+      </div>
+
+      <div className="g4 mb6">
+        {stats.map(s=>(
+          <div key={s.l} className="card stat">
+            <div className="fx jb aic mb4"><div className="s-lbl">{s.l}</div><div className="s-ico" style={{background:`${s.c}22`}}><Ico n={s.i} sz={17} cl={s.c}/></div></div>
+            <div className="s-val" style={{color:s.c}}>{s.v}</div><div className="s-sub">{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="g2 mb6">
+        <div className="card p6">
+          <div className="cht">Backup Activity — 7 Days</div><div className="chs">Completed vs failed Azure Blob uploads</div>
+          {Recharts&&<Recharts.ResponsiveContainer width="100%" height={205}>
+            <Recharts.BarChart data={daily} margin={{top:0,right:0,left:-22,bottom:0}}>
+              <Recharts.CartesianGrid strokeDasharray="3 3" stroke="#0f1e35"/>
+              <Recharts.XAxis dataKey="_id" tick={{fill:"#2e4a72",fontSize:11}} axisLine={false} tickLine={false}/>
+              <Recharts.YAxis tick={{fill:"#2e4a72",fontSize:11}} axisLine={false} tickLine={false}/>
+              <Recharts.Tooltip contentStyle={TT}/>
+              <Recharts.Legend wrapperStyle={{fontSize:12,color:"#7fa5d8"}}/>
+              <Recharts.Bar dataKey="completed" fill="#10b981" radius={[4,4,0,0]} name="Completed"/>
+              <Recharts.Bar dataKey="failed" fill="#ef4444" radius={[4,4,0,0]} name="Failed"/>
+            </Recharts.BarChart>
+          </Recharts.ResponsiveContainer>}
+        </div>
+        <div className="card p6">
+          <div className="cht">Azure Blob Upload Volume</div><div className="chs">Data transferred to Azure Blob Storage (GB)</div>
+          {Recharts&&<Recharts.ResponsiveContainer width="100%" height={205}>
+            <Recharts.AreaChart data={daily} margin={{top:0,right:0,left:-22,bottom:0}}>
+              <defs>
+                <linearGradient id="azgrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#0078d4" stopOpacity={0.4}/>
+                  <stop offset="95%" stopColor="#5c2d91" stopOpacity={0}/>
+                </linearGradient>
+              </defs>
+              <Recharts.CartesianGrid strokeDasharray="3 3" stroke="#0f1e35"/>
+              <Recharts.XAxis dataKey="_id" tick={{fill:"#2e4a72",fontSize:11}} axisLine={false} tickLine={false}/>
+              <Recharts.YAxis tick={{fill:"#2e4a72",fontSize:11}} axisLine={false} tickLine={false} tickFormatter={v=>`${(v/1e9).toFixed(1)}G`}/>
+              <Recharts.Tooltip contentStyle={TT} formatter={v=>[`${(v/1e9).toFixed(2)} GB`,"Azure Upload"]}/>
+              <Recharts.Area type="monotone" dataKey="dataTransferred" stroke="#0078d4" fill="url(#azgrad)" strokeWidth={2}/>
+            </Recharts.AreaChart>
+          </Recharts.ResponsiveContainer>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{padding:"18px 22px 14px",borderBottom:"1px solid var(--border)"}} className="fx jb aic">
+          <div className="cht" style={{marginBottom:0}}>Recent Azure Backup Activity</div>
+          <span className="chip chip-az fs11"><AzLogo sz={11}/>&nbsp;Blob Storage</span>
+        </div>
+        <div style={{padding:"6px 22px 16px"}}>
+          {recent.length===0
+            ?<div className="empty"><div className="e-ico">☁️</div><div className="e-ttl">No Azure backup activity yet</div><div className="e-sub">Create a backup job targeting Azure Blob Storage to get started</div></div>
+            :recent.map(l=>(
+              <div key={l._id} className="fx aic g3u" style={{padding:"13px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{width:7,height:7,borderRadius:"50%",background:dotClr(l.status),flexShrink:0}}/>
+                <div style={{flex:1}}>
+                  <div className="fw6 fs13">{l.job?.name||"—"}</div>
+                  <div className="fs12 ct3 mt2">{fmtAgo(l.startTime)} · {fmtB(l.dataSize?.transferred)} → Azure Blob · {fmtMs(l.duration)}</div>
+                  {l.azure?.blobName&&<div className="mono fs11 ct3 mt2 trunc">{l.azure.blobName}</div>}
+                </div>
+                <Badge s={l.status}/>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ── Create Job Modal ────────────────────────────────────────────────────── */
+const CreateJob = ({open,onClose,onOk}) => {
+  const toast=useToast(); const [step,setStep]=useState(1); const [busy,setBusy]=useState(false); const [tagIn,setTagIn]=useState("");
+  const init={name:"",description:"",source:{type:"local",path:""},destination:{type:"azure_blob",path:""},schedule:{frequency:"daily",cronExpression:"0 2 * * *",timezone:"UTC"},retention:{days:30,maxVersions:10},compression:{enabled:true,algorithm:"gzip"},encryption:{enabled:true,keyVaultSecretName:""},tags:[],notifyOnFailure:true,notifyOnSuccess:false};
+  const [f,setF]=useState(init);
+  const set=(path,val)=>setF(prev=>{const n={...prev};const keys=path.split(".");let c=n;for(let i=0;i<keys.length-1;i++)c=c[keys[i]]={...c[keys[i]]};c[keys[keys.length-1]]=val;return n;});
+  const FREQS=[{v:"manual",l:"Manual only",c:""},{v:"hourly",l:"Every hour",c:"0 * * * *"},{v:"daily",l:"Daily at 2:00 AM",c:"0 2 * * *"},{v:"weekly",l:"Weekly (Sunday 2AM)",c:"0 2 * * 0"},{v:"monthly",l:"Monthly (1st, 2AM)",c:"0 2 1 * *"}];
+  const DEST_TYPES=[{v:"azure_blob",l:"Azure Blob (Hot)"},{v:"azure_cool",l:"Azure Blob (Cool)"},{v:"azure_archive",l:"Azure Blob (Archive)"},{v:"azure_files",l:"Azure Files"},{v:"s3",l:"AWS S3"},{v:"gcs",l:"Google Cloud Storage"},{v:"local",l:"Local Storage"}];
+  const SRC_TYPES=[{v:"local",l:"Local filesystem"},{v:"azure_blob",l:"Azure Blob Storage"},{v:"azure_cosmos",l:"Azure Cosmos DB"},{v:"azure_sql",l:"Azure SQL Database"},{v:"azure_files",l:"Azure Files"},{v:"s3",l:"AWS S3"},{v:"gcs",l:"GCS"},{v:"database",l:"Generic database"}];
+  const submit=async()=>{
+    if(!f.name.trim())return toast.error("Job name required");
+    if(!f.source.path.trim())return toast.error("Source path required");
+    if(!f.destination.path.trim())return toast.error("Destination path required");
+    setBusy(true);
+    try{await API.jobs.create(f);toast.success("Azure backup job created!");onOk();onClose();setStep(1);setF(init);}
+    catch(err){toast.error(err.message);}
+    finally{setBusy(false);}
+  };
+  const addTag=()=>{const t=tagIn.trim();if(t&&!f.tags.includes(t))set("tags",[...f.tags,t]);setTagIn("");};
+  const footer=(
+    <>{step>1&&<button className="btn btn-g" onClick={()=>setStep(s=>s-1)}>← Back</button>}
+    <button className="btn btn-g" onClick={onClose}>Cancel</button>
+    {step<3?<button className="btn btn-p" onClick={()=>setStep(s=>s+1)}>Next →</button>
+            :<button className="btn btn-az" onClick={submit} disabled={busy}>{busy?<Spin sz={13}/>:null}<AzLogo sz={14}/>Create Azure Job</button>}</>
+  );
+  return(
+    <Modal open={open} onClose={onClose} title={`New Azure Backup Job — Step ${step} of 3`} footer={footer}>
+      {step===1&&<>
+        <div className="fg"><label className="lbl">Job name *</label><input className="inp" placeholder="e.g. Production DB — Azure Daily Backup" value={f.name} onChange={e=>set("name",e.target.value)}/></div>
+        <div className="fg"><label className="lbl">Description</label><textarea className="inp" rows={2} placeholder="Optional…" value={f.description} onChange={e=>set("description",e.target.value)}/></div>
+        <div className="g2">
+          <div className="fg" style={{marginBottom:0}}><label className="lbl">Source type *</label>
+            <select className="inp" value={f.source.type} onChange={e=>set("source.type",e.target.value)}>
+              {SRC_TYPES.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}
+            </select>
+          </div>
+          <div className="fg" style={{marginBottom:0}}><label className="lbl">Source path *</label><input className="inp" placeholder="/data or cosmos://account/db" value={f.source.path} onChange={e=>set("source.path",e.target.value)}/></div>
+        </div>
+        <div className="divider"/>
+        <div style={{padding:"10px 14px",background:"rgba(0,120,212,.08)",borderRadius:8,borderLeft:"3px solid #0078d4",marginBottom:14}}>
+          <div className="fs12 cb fw7 mb4">🔷 Azure Blob Storage destination</div>
+          <div className="fs12 ct3">Backups are uploaded to Azure Blob Storage and a time-limited SAS URL is generated for secure download.</div>
+        </div>
+        <div className="g2">
+          <div className="fg" style={{marginBottom:0}}><label className="lbl">Azure destination tier *</label>
+            <select className="inp" value={f.destination.type} onChange={e=>set("destination.type",e.target.value)}>
+              {DEST_TYPES.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}
+            </select>
+          </div>
+          <div className="fg" style={{marginBottom:0}}><label className="lbl">Destination path / container prefix *</label><input className="inp" placeholder="backups/production or mycontainer/path" value={f.destination.path} onChange={e=>set("destination.path",e.target.value)}/></div>
+        </div>
+      </>}
+
+      {step===2&&<>
+        <div className="fg"><label className="lbl">Schedule frequency</label>
+          <select className="inp" value={f.schedule.frequency} onChange={e=>{const o=FREQS.find(x=>x.v===e.target.value);set("schedule.frequency",e.target.value);if(o?.c)set("schedule.cronExpression",o.c);}}>
+            {FREQS.map(o=><option key={o.v} value={o.v}>{o.l}</option>)}
+          </select>
+        </div>
+        <div className="fg"><label className="lbl">Cron expression</label><input className="inp mono" value={f.schedule.cronExpression} onChange={e=>set("schedule.cronExpression",e.target.value)}/><div className="err-t" style={{color:"var(--t3)"}}>min hour day month weekday — e.g. 0 2 * * * = 2AM daily</div></div>
+        <div className="g2">
+          <div className="fg" style={{marginBottom:0}}><label className="lbl">Retention (days)</label><input className="inp" type="number" min={1} max={365} value={f.retention.days} onChange={e=>set("retention.days",+e.target.value)}/></div>
+          <div className="fg" style={{marginBottom:0}}><label className="lbl">Max blob versions</label><input className="inp" type="number" min={1} max={100} value={f.retention.maxVersions} onChange={e=>set("retention.maxVersions",+e.target.value)}/></div>
+        </div>
+        <div style={{marginTop:14,padding:"10px 14px",background:"rgba(0,120,212,.08)",borderRadius:8,borderLeft:"3px solid #0078d4"}}>
+          <div className="fs12 ct3">Old blobs beyond retention policy are automatically deleted from Azure Blob Storage after each successful run.</div>
+        </div>
+      </>}
+
+      {step===3&&<div style={{display:"flex",flexDirection:"column",gap:14}}>
+        {[
+          {k:"compression.enabled",t:"Compression",s:"gzip/bzip2/zstd to reduce Azure storage costs",extra:f.compression.enabled&&<div style={{marginTop:10}}><label className="lbl">Algorithm</label><select className="inp" value={f.compression.algorithm} onChange={e=>set("compression.algorithm",e.target.value)}>{["gzip","bzip2","zstd","none"].map(a=><option key={a} value={a}>{a}</option>)}</select></div>},
+          {k:"encryption.enabled",t:"Azure-compatible Encryption",s:"AES-256-GCM — key optionally stored in Azure Key Vault",extra:f.encryption.enabled&&<div style={{marginTop:10}}><label className="lbl">Key Vault secret name (optional)</label><input className="inp" placeholder="backup-encryption-key" value={f.encryption.keyVaultSecretName} onChange={e=>set("encryption.keyVaultSecretName",e.target.value)}/></div>},
+          {k:"notifyOnFailure",t:"Notify on Azure upload failure",s:"Alert when blob upload to Azure fails"},
+          {k:"notifyOnSuccess",t:"Notify on success",s:"Alert when blob is successfully uploaded"},
+        ].map(({k,t,s,extra})=>{
+          const val=k.includes(".")?f[k.split(".")[0]][k.split(".")[1]]:f[k];
+          return(
+            <div key={k} className="card p4">
+              <div className="fx jb aic">
+                <div><div className="fw7 fs13">{t}</div><div className="fs12 ct3 mt2">{s}</div></div>
+                <label style={{cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+                  <input type="checkbox" checked={val} onChange={e=>set(k,e.target.checked)} style={{accentColor:"var(--az-blue)",width:15,height:15}}/>
+                  <span className="fs13">{val?"On":"Off"}</span>
+                </label>
+              </div>
+              {extra}
+            </div>
+          );
+        })}
+        <div>
+          <label className="lbl">Tags</label>
+          <div className="fx g2u"><input className="inp" value={tagIn} onChange={e=>setTagIn(e.target.value)} placeholder="Add tag…" onKeyDown={e=>e.key==="Enter"&&(e.preventDefault(),addTag())}/><button className="btn btn-g btn-sm" onClick={addTag}>Add</button></div>
+          {f.tags.length>0&&<div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:10}}>{f.tags.map(t=><span key={t} className="chip chip-az" style={{cursor:"pointer"}} onClick={()=>set("tags",f.tags.filter(x=>x!==t))}>{t} ×</span>)}</div>}
+        </div>
+      </div>}
+    </Modal>
+  );
+};
+
+/* ── Jobs Page ───────────────────────────────────────────────────────────── */
+const JobsPage = () => {
+  const toast=useToast(); const [jobs,setJobs]=useState([]); const [busy,setBusy]=useState(true);
+  const [create,setCreate]=useState(false); const [search,setSearch]=useState(""); const [sfilt,setSfilt]=useState("");
+  const [runId,setRunId]=useState(null); const [delJob,setDelJob]=useState(null); const [blobsJob,setBlobsJob]=useState(null); const [blobs,setBlobs]=useState([]);
+  const load=useCallback(async()=>{setBusy(true);try{const r=await API.jobs.list({...(search&&{search}),...(sfilt&&{status:sfilt})});setJobs(r.data.jobs);}catch(err){toast.error(err.message);}finally{setBusy(false);};},[search,sfilt]);
+  useEffect(()=>{load();},[load]);
+  const handleRun=async id=>{setRunId(id);try{await API.jobs.run(id);toast.success("Azure backup started!");setTimeout(load,2500);}catch(err){toast.error(err.message);}finally{setRunId(null);};};
+  const handleToggle=async job=>{try{await API.jobs.update(job._id,{status:job.status==="paused"?"active":"paused"});toast.success(`Job ${job.status==="paused"?"resumed":"paused"}.`);load();}catch(err){toast.error(err.message);};};
+  const handleDel=async id=>{try{await API.jobs.del(id);toast.success("Deleted.");setDelJob(null);load();}catch(err){toast.error(err.message);};};
+  const handleRetention=async id=>{try{const r=await API.jobs.retention(id);toast.success(r.message);}catch(err){toast.error(err.message);};};
+  const showBlobs=async job=>{setBlobsJob(job);try{const r=await API.jobs.blobs(job._id);setBlobs(r.data.blobs);}catch{setBlobs([]);}};
+  return(
+    <div className="page">
+      <div className="sh"><div><div className="sttl">Backup Jobs</div><div className="ssub">{jobs.length} job{jobs.length!==1?"s":""} · Azure Blob Storage</div></div>
+        <button className="btn btn-az" onClick={()=>setCreate(true)}><Ico n="plus" sz={15}/>New Azure Job</button>
+      </div>
+      <div className="fx g3u mb6" style={{flexWrap:"wrap"}}>
+        <div style={{position:"relative",flex:1,minWidth:200}}>
+          <Ico n="search" sz={14} cl="var(--t3)" style={{position:"absolute",left:11,top:"50%",transform:"translateY(-50%)"}}/>
+          <input className="inp" style={{paddingLeft:34}} placeholder="Search jobs…" value={search} onChange={e=>setSearch(e.target.value)}/>
+        </div>
+        <select className="inp" style={{width:150}} value={sfilt} onChange={e=>setSfilt(e.target.value)}>
+          <option value="">All statuses</option>
+          {["active","paused","disabled","error"].map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      {busy?<div className="loader"><Spin sz={28}/></div>
+      :jobs.length===0?(<div className="card"><div className="empty"><div className="e-ico">🔷</div><div className="e-ttl">No Azure backup jobs yet</div><div className="e-sub">Create your first job to back up data to Azure Blob Storage</div><button className="btn btn-az" onClick={()=>setCreate(true)}><AzLogo sz={15}/>Create First Azure Job</button></div></div>)
+      :(<div className="card tbl-wrap"><table>
+          <thead><tr><th>Job Name</th><th>Source → Azure Dest</th><th>Schedule</th><th>Last Blob</th><th>Status</th><th>Success</th><th>Actions</th></tr></thead>
+          <tbody>{jobs.map(j=>(
+            <tr key={j._id}>
+              <td><div className="td-p">{j.name}</div>{j.description&&<div className="fs12 ct3 trunc" style={{maxWidth:180}}>{j.description}</div>}</td>
+              <td>
+                <span className="chip">{j.source?.type?.replace("azure_","")?.toUpperCase()}</span>
+                <span className="ct3"> → </span>
+                <span className="chip chip-az"><AzLogo sz={10}/>&nbsp;{j.destination?.type?.replace("azure_","az_")?.toUpperCase()}</span>
+              </td>
+              <td><div className="mono fs12">{j.schedule?.cronExpression||"manual"}</div><div className="fs12 ct3">{j.schedule?.frequency}</div></td>
+              <td>
+                {j.azure?.lastBlobName?<div className="mono fs11 ct3 trunc" style={{maxWidth:160}}>{j.azure.lastBlobName.split("/").pop()}</div>:<span className="ct3">—</span>}
+                <div className="fs12 ct3">{fmtAgo(j.schedule?.lastRun)}</div>
+              </td>
+              <td><Badge s={j.status}/></td>
+              <td><div className="fx aic g2u"><div style={{width:55}}><div className="pbar"><div className="pfill" style={{width:`${j.successRate||0}%`,background:j.successRate>70?"var(--green)":"var(--amber)"}}/></div></div><span className="fs12 ct3">{j.successRate||0}%</span></div></td>
+              <td><div className="fx g2u">
+                <button className="btn btn-ok btn-sm" onClick={()=>handleRun(j._id)} disabled={runId===j._id||j.status==="disabled"} title="Run → Azure">
+                  {runId===j._id?<Spin sz={11}/>:<Ico n="play" sz={11}/>}
+                </button>
+                <button className="btn btn-g btn-sm" onClick={()=>handleToggle(j)} title={j.status==="paused"?"Resume":"Pause"}>{j.status==="paused"?"▶":"⏸"}</button>
+                <button className="btn btn-g btn-sm" onClick={()=>showBlobs(j)} title="View Azure blobs"><Ico n="storage" sz={11}/></button>
+                <button className="btn btn-g btn-sm" onClick={()=>handleRetention(j._id)} title="Apply retention policy"><Ico n="retention" sz={11}/></button>
+                <button className="btn btn-d btn-sm" onClick={()=>setDelJob(j)} title="Delete"><Ico n="trash" sz={11}/></button>
+              </div></td>
+            </tr>
+          ))}</tbody>
+        </table></div>)
+      }
+      <CreateJob open={create} onClose={()=>setCreate(false)} onOk={load}/>
+      <Modal open={!!delJob} onClose={()=>setDelJob(null)} title="Confirm deletion" footer={<><button className="btn btn-g" onClick={()=>setDelJob(null)}>Cancel</button><button className="btn btn-d" onClick={()=>handleDel(delJob._id)}>Delete permanently</button></>}>
+        <p style={{fontSize:13.5,color:"var(--t2)",lineHeight:1.7}}>Delete <strong style={{color:"var(--t1)"}}>{delJob?.name}</strong>? All execution logs will be removed. Azure blobs are NOT deleted (manage separately in Azure Portal).</p>
+      </Modal>
+      <Modal open={!!blobsJob} onClose={()=>{setBlobsJob(null);setBlobs([]);}} title={`Azure Blobs — ${blobsJob?.name||""}`}>
+        {blobs.length===0?<div className="empty" style={{padding:"24px 0"}}><div className="e-ico">☁️</div><div className="e-ttl">No blobs yet</div><div className="e-sub">Run this job to create Azure backup blobs</div></div>
+        :<div className="tbl-wrap"><table>
+          <thead><tr><th>Blob name</th><th>Size</th><th>Created</th><th>Download</th></tr></thead>
+          <tbody>{blobs.map((b,i)=>(
+            <tr key={i}>
+              <td><div className="mono fs11 ct3 trunc" style={{maxWidth:220}}>{b.name?.split("/").pop()}</div></td>
+              <td className="fs13">{fmtB(b.size)}</td>
+              <td className="fs13">{fmtD(b.createdOn)}</td>
+              <td>{b.downloadUrl?<a href={b.downloadUrl} target="_blank" rel="noopener noreferrer" className="btn btn-az btn-sm" style={{textDecoration:"none"}}><Ico n="download" sz={12}/>SAS URL</a>:<span className="ct3 fs12">No key</span>}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>}
+      </Modal>
+    </div>
+  );
+};
+
+/* ── Logs Page ───────────────────────────────────────────────────────────── */
+const LogsPage = () => {
+  const toast=useToast(); const [logs,setLogs]=useState([]); const [busy,setBusy]=useState(true);
+  const [pg,setPg]=useState(1); const [total,setTotal]=useState(0); const [sfilt,setSfilt]=useState("");
+  const load=useCallback(async()=>{setBusy(true);try{const r=await API.dash.activity({page:pg,limit:20,...(sfilt&&{status:sfilt})});setLogs(r.data.logs);setTotal(r.data.pagination.total);}catch(err){toast.error(err.message);}finally{setBusy(false);};},[pg,sfilt]);
+  useEffect(()=>{load();},[load]);
+  const pages=Math.ceil(total/20);
+  return(
+    <div className="page">
+      <div className="sh"><div><div className="sttl">Activity Logs</div><div className="ssub">{total} Azure backup executions</div></div>
+        <select className="inp" style={{width:150}} value={sfilt} onChange={e=>{setSfilt(e.target.value);setPg(1);}}>
+          <option value="">All statuses</option>{["completed","failed","running","pending","cancelled"].map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+      {busy?<div className="loader"><Spin sz={28}/></div>
+      :logs.length===0?<div className="card"><div className="empty"><div className="e-ico">📋</div><div className="e-ttl">No logs yet</div><div className="e-sub">Run an Azure backup job to see execution history</div></div></div>
+      :<div className="card tbl-wrap"><table>
+        <thead><tr><th>Job</th><th>Status</th><th>Started</th><th>Duration</th><th>Azure Upload</th><th>Compression</th><th>Trigger</th></tr></thead>
+        <tbody>{logs.map(l=>(
+          <tr key={l._id}>
+            <td><div className="td-p">{l.job?.name||"—"}</div><div className="mono fs11 ct3">{l.runId?.substring(0,8)}…</div></td>
+            <td><Badge s={l.status}/></td>
+            <td><div className="fs13">{fmtD(l.startTime)}</div></td>
+            <td><div className="fs13">{fmtMs(l.duration)}</div></td>
+            <td>
+              <div className="fs13 cg">{fmtB(l.dataSize?.transferred)}</div>
+              {l.azure?.blobName&&<div className="mono fs11 ct3 trunc" style={{maxWidth:140}}>{l.azure.blobName.split("/").pop()}</div>}
+              {l.azure?.tier&&<span className="chip chip-az fs11">{l.azure.tier}</span>}
+            </td>
+            <td>
+              {l.azure?.compressionRatio?<div className="fs13">{l.azure.compressionRatio}× ratio</div>:<span className="ct3">—</span>}
+              {l.azure?.encryptionUsed&&<div className="fs11 cg">🔐 AES-256</div>}
+              {l.azure?.simulated&&<div className="fs11 ca">⚠ simulated</div>}
+            </td>
+            <td><span className="chip">{l.triggeredBy}</span></td>
+          </tr>
+        ))}</tbody>
+      </table>
+      {pages>1&&<div className="fx aic jb" style={{padding:"14px 20px",borderTop:"1px solid var(--border)"}}>
+        <span className="fs13 ct3">Page {pg} of {pages}</span>
+        <div className="fx g2u"><button className="btn btn-g btn-sm" disabled={pg<=1} onClick={()=>setPg(p=>p-1)}>← Prev</button><button className="btn btn-g btn-sm" disabled={pg>=pages} onClick={()=>setPg(p=>p+1)}>Next →</button></div>
+      </div>}
+      </div>}
+    </div>
+  );
+};
+
+/* ── Azure Services Page ─────────────────────────────────────────────────── */
+const AzurePage = () => {
+  const [info,setInfo]=useState(null); const [busy,setBusy]=useState(true); const [stats,setStats]=useState(null);
+  useEffect(()=>{
+    Promise.all([API.azure.info(),API.dash.stats()])
+      .then(([i,s])=>{setInfo(i.data);setStats(s.data.azure);})
+      .catch(()=>{})
+      .finally(()=>setBusy(false));
+  },[]);
+  if(busy)return<div className="loader"><Spin sz={28}/></div>;
+  const services=[
+    {name:"Azure Blob Storage",desc:"Primary backup destination. Files are stored as block blobs with configurable access tiers (Hot/Cool/Archive). Generates time-limited SAS URLs for secure downloads.",status:stats?.connected?"connected":"simulated",detail:info?.accountName?`${info.accountName}.blob.core.windows.net / ${info.containerName}`:null},
+    {name:"Azure Key Vault",desc:"Securely stores JWT secrets, MongoDB connection strings, and encryption keys. Replaces plain environment variable secrets in production.",status:stats?.keyVaultEnabled?"connected":"disabled",detail:info?.keyVaultUri||null},
+    {name:"Azure Application Insights",desc:"Telemetry, performance monitoring, exception tracking, and custom events for every backup run. Integrated with Azure Monitor dashboards.",status:stats?.insightsEnabled?"connected":"disabled",detail:stats?.insightsEnabled?"Connection string active":null},
+    {name:"DefaultAzureCredential",desc:"Unified authentication chain: Managed Identity → Service Principal → Environment → Azure CLI. Zero secret rotation needed in production.",status:info?.accountName?"connected":"disabled",detail:"@azure/identity SDK — automatic credential chain"},
+    {name:"Azure Blob Retention Policy",desc:"Automatically deletes blobs older than the configured retention period and keeps only the specified number of versions per backup job.",status:"connected",detail:"Applied after every successful backup run"},
+    {name:"SAS URL Generation",desc:"Time-limited Shared Access Signature URLs are generated for each blob, enabling secure direct downloads without exposing the storage account key.",status:info?.accountName?"connected":"simulated",detail:`Expiry: ${info?._sasExpiry||2}h per URL`},
+  ];
+  const PRICING=[
+    {tier:"Hot",price:"~$0.018/GB/month",use:"Frequent access (< 30 days)"},
+    {tier:"Cool",price:"~$0.01/GB/month",use:"Infrequent access (30–90 days) ← recommended for backups"},
+    {tier:"Cold",price:"~$0.0045/GB/month",use:"Rare access (90–180 days)"},
+    {tier:"Archive",price:"~$0.00099/GB/month",use:"Long-term archive (> 180 days, hours to rehydrate)"},
+  ];
+  return(
+    <div className="page">
+      <div className="sh"><div><div className="sttl">Azure Services</div><div className="ssub">Microsoft Azure integration status and configuration</div></div>
+        <div className="fx g2u aic"><AzLogo sz={20}/><span className="fw7 cb">Microsoft Azure</span></div>
+      </div>
+      <div className="az-banner mb6">
+        <div className="az-banner-ico"><AzLogo sz={22}/></div>
+        <div style={{flex:1}}>
+          <div className="fw7 fs13">Azure Integration Overview</div>
+          <div className="fs12 ct3 mt2">Storage account: <span className="mono cb">{info?.accountName||"not configured"}</span> · Region: <span className="mono">{info?.region||"eastus"}</span> · Container: <span className="mono">{info?.containerName}</span></div>
+          <div className="fx g3u mt4" style={{flexWrap:"wrap"}}>
+            {[["Blob Storage",stats?.connected],["Key Vault",stats?.keyVaultEnabled],["App Insights",stats?.insightsEnabled],["Cron Scheduler",true]].map(([l,on])=>(
+              <span key={l} className={on?"az-pill":"az-pill-off"}><div style={{width:6,height:6,borderRadius:"50%",background:on?"var(--green)":"var(--t3)"}}/>{l}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="g3 mb6">{services.map(s=><AzSvcCard key={s.name} {...s}/>)}</div>
+      <div className="card p6 mb6">
+        <div className="cht mb4">Azure Blob Storage — Access Tiers & Pricing</div>
+        <div className="tbl-wrap"><table>
+          <thead><tr><th>Tier</th><th>Approx. cost</th><th>Best for</th></tr></thead>
+          <tbody>{PRICING.map(p=>(
+            <tr key={p.tier}>
+              <td><span className="chip chip-az">{p.tier}</span></td>
+              <td><span className="mono fs13 cg">{p.price}</span></td>
+              <td className="fs13 ct2">{p.use}</td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      </div>
+      <div className="card p6">
+        <div className="cht mb4">Setup Checklist</div>
+        {[
+          {done:!!info?.accountName,t:"Azure Storage Account created",d:"Create in Azure Portal → Storage Accounts → New"},
+          {done:!!info?.accountName,t:"AZURE_STORAGE_ACCOUNT_NAME set in Render",d:"Environment variable in your Render service"},
+          {done:!!info?.accountName,t:"AZURE_STORAGE_ACCOUNT_KEY set in Render",d:"Primary access key from Azure Portal"},
+          {done:!!stats?.keyVaultEnabled,t:"Azure Key Vault configured (optional)",d:"Recommended for production secret management"},
+          {done:!!stats?.insightsEnabled,t:"Application Insights connected (optional)",d:"APPLICATIONINSIGHTS_CONNECTION_STRING env var"},
+          {done:true,t:"MongoDB Atlas database connected",d:"MONGODB_URI set in Render environment"},
+          {done:true,t:"Frontend deployed to Vercel",d:"BACKEND_URL set in index.html before deploy"},
+        ].map(({done,t,d})=>(
+          <div key={t} className="fx aic g3u" style={{padding:"11px 0",borderBottom:"1px solid var(--border)"}}>
+            <div style={{width:20,height:20,borderRadius:"50%",background:done?"var(--green-dim)":"var(--bg-in)",border:`2px solid ${done?"var(--green)":"var(--border2)"}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+              {done&&<span style={{fontSize:10,color:"var(--green)",fontWeight:800}}>✓</span>}
+            </div>
+            <div style={{flex:1}}>
+              <div className={`fs13 fw6 ${done?"cg":"ct2"}`}>{t}</div>
+              <div className="fs12 ct3 mt2">{d}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/* ── Settings Page ───────────────────────────────────────────────────────── */
+const SettingsPage = () => {
+  const {user,setUser}=useAuth(); const toast=useToast();
+  const [name,setName]=useState(user?.name||""); const [busy,setBusy]=useState(false);
+  const save=async()=>{setBusy(true);try{const r=await API.auth.updateProfile({name});setUser(r.data.user);toast.success("Profile updated!");}catch(err){toast.error(err.message);}finally{setBusy(false);}};
+  const used=user?.azure?.storageUsedBytes||0; const limit=user?.azure?.storageLimitBytes||10*1024**3;
+  const pct=Math.min(100,Math.round((used/limit)*100)); const pclr=pct>85?"var(--red)":pct>65?"var(--amber)":"var(--az-blue)";
+  return(
+    <div className="page">
+      <div className="sh"><div><div className="sttl">Settings</div><div className="ssub">Account & Azure configuration</div></div></div>
+      <div className="g2" style={{maxWidth:860}}>
+        <div>
+          <div className="card p6 mb4">
+            <div className="fw8 mb4" style={{fontSize:16}}>Profile</div>
+            <div className="fx aic g4u mb6"><div className="av" style={{width:50,height:50,fontSize:19}}>{user?.name?.[0]?.toUpperCase()}</div>
+              <div><div className="fw7">{user?.name}</div><div className="fs13 ct3">{user?.email}</div>
+                <div className="fx g2u mt2"><span className="badge b-green">{user?.plan} plan</span><span className="badge b-azure">🔷 Azure</span></div>
+              </div>
+            </div>
+            <div className="fg"><label className="lbl">Display name</label><input className="inp" value={name} onChange={e=>setName(e.target.value)}/></div>
+            <button className="btn btn-p" onClick={save} disabled={busy}>{busy?<Spin sz={13}/>:null}Save changes</button>
+          </div>
+          <div className="az-card p6">
+            <div className="fx aic g2u mb4"><AzLogo sz={18}/><div className="fw7 fs13">Azure Blob Storage Usage</div></div>
+            <div className="fx jb fs12 ct3 mb4"><span>{fmtB(used)} used of {fmtB(limit)}</span><span>{pct}%</span></div>
+            <div className="pbar" style={{height:8}}><div className="pfill" style={{width:`${pct}%`,background:pclr}}/></div>
+            <div className="fx jb mt4 fs12">
+              <span className="ct3">Blobs stored: <span className="fw6 cb">{user?.azure?.blobCount||0}</span></span>
+              <span className="ct3">Last synced: <span className="fw6">{fmtAgo(user?.azure?.lastSyncedAt)}</span></span>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div className="card p6 mb4">
+            <div className="fw8 mb4" style={{fontSize:16}}>Account Information</div>
+            {[["Email",user?.email],["Role",user?.role],["Plan",user?.plan],["Last login",fmtD(user?.lastLogin)],["Member since",fmtD(user?.createdAt)]].map(([k,v])=>(
+              <div key={k} className="fx jb" style={{padding:"10px 0",borderBottom:"1px solid var(--border)"}}>
+                <span className="fs13 ct3">{k}</span><span className="fs13 fw6">{v||"—"}</span>
+              </div>
+            ))}
+          </div>
+          <div className="az-card p6">
+            <div className="fx aic g2u mb4"><AzLogo sz={18}/><div className="fw7 fs13">Azure Security</div></div>
+            {[
+              {l:"Encryption",v:"AES-256-GCM at rest",ok:true},
+              {l:"Key management",v:"Azure Key Vault (when configured)",ok:true},
+              {l:"Token auth",v:"JWT — 7-day expiry",ok:true},
+              {l:"Password hashing",v:"bcrypt — cost factor 12",ok:true},
+              {l:"Download links",v:"Time-limited SAS URLs",ok:true},
+              {l:"Transport",v:"TLS 1.2+ enforced",ok:true},
+            ].map(({l,v,ok})=>(
+              <div key={l} className="fx aic g2u" style={{padding:"8px 0",borderBottom:"1px solid rgba(0,120,212,.1)"}}>
+                <span style={{fontSize:12,color:ok?"var(--green)":"var(--amber)",fontWeight:700}}>✓</span>
+                <span className="fs12 ct3" style={{flex:1}}>{l}</span>
+                <span className="fs12 fw6">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+/* ── App shell ───────────────────────────────────────────────────────────── */
+const Shell = () => {
+  const [pg,setPg]=useState("dashboard");
+  const pages={dashboard:<DashboardPage/>,jobs:<JobsPage/>,logs:<LogsPage/>,azure:<AzurePage/>,settings:<SettingsPage/>};
+  const titles={dashboard:"Dashboard",jobs:"Backup Jobs",logs:"Activity Logs",azure:"Azure Services",settings:"Settings"};
+  return(
+    <div className="shell">
+      <Sidebar pg={pg} setPg={setPg}/>
+      <div className="main">
+        <div className="topbar">
+          <div className="fx aic g2u"><AzLogo sz={16}/><span className="fw7" style={{fontSize:15}}>{titles[pg]}</span></div>
+          <div className="fx aic g2u">
+            <span className="chip chip-az fs11">🔷 Azure Edition</span>
+            <button className="btn btn-g btn-sm btn-ic" onClick={()=>window.location.reload()} title="Refresh"><Ico n="refresh" sz={14}/></button>
+            <button className="btn btn-g btn-sm btn-ic" title="Notifications"><Ico n="bell" sz={14}/></button>
+          </div>
+        </div>
+        {pages[pg]}
+      </div>
+    </div>
+  );
+};
+
+const App = () => {
+  const [view,setView]=useState("login");
+  return(
+    <ToastProvider><AuthProvider><Gate view={view} setView={setView}/></AuthProvider></ToastProvider>
+  );
+};
+
+const Gate = ({view,setView}) => {
+  const {user,loading}=useAuth();
+  if(loading)return(
+    <div style={{height:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{width:54,height:54,borderRadius:14,background:"linear-gradient(135deg,#0078d4,#5c2d91)",display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <AzLogo sz={32}/>
+      </div>
+      <Spin sz={22}/>
+      <div className="fs12 ct3">Connecting to Azure services…</div>
+    </div>
+  );
+  if(!user)return view==="login"?<Login flip={()=>setView("register")}/>:<Register flip={()=>setView("login")}/>;
+  return <Shell/>;
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

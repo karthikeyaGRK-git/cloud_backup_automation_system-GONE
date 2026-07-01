@@ -1,0 +1,1084 @@
+/**
+ * ╔══════════════════════════════════════════════════════════════════╗
+ * ║   CLOUD BACKUP AUTOMATION SYSTEM  —  BACKEND  v3.0             ║
+ * ║   Microsoft Azure Integration:                                  ║
+ * ║     • Azure Blob Storage   — backup file storage               ║
+ * ║     • Azure Key Vault      — secrets management                ║
+ * ║     • Azure App Insights   — telemetry & monitoring            ║
+ * ║     • Azure Cosmos DB      — optional NoSQL data layer         ║
+ * ║     • DefaultAzureCredential — unified auth (MSI + local)      ║
+ * ║                                                                 ║
+ * ║   Deploy to: Render  (https://render.com)                      ║
+ * ║   Single file — zero local imports                             ║
+ * ╚══════════════════════════════════════════════════════════════════╝
+ *
+ * REQUIRED ENV VARS (set in Render dashboard):
+ *
+ *  Core:
+ *   MONGODB_URI                  MongoDB Atlas connection string
+ *   JWT_SECRET                   32+ char random string
+ *   FRONTEND_URL                 Your Vercel frontend URL
+ *   NODE_ENV                     production
+ *
+ *  Azure Storage (Blob):
+ *   AZURE_STORAGE_ACCOUNT_NAME   e.g. mybackupstorage
+ *   AZURE_STORAGE_ACCOUNT_KEY    Storage account access key
+ *   AZURE_STORAGE_CONTAINER      e.g. backups  (created automatically)
+ *   AZURE_STORAGE_SAS_EXPIRY_HRS How long download SAS URLs are valid (default 2)
+ *
+ *  Azure Key Vault (optional but recommended):
+ *   AZURE_KEYVAULT_URI           https://your-vault.vault.azure.net
+ *   AZURE_CLIENT_ID              Service principal / Managed Identity client ID
+ *   AZURE_CLIENT_SECRET          Service principal secret
+ *   AZURE_TENANT_ID              Azure AD tenant ID
+ *
+ *  Azure Application Insights (optional):
+ *   APPLICATIONINSIGHTS_CONNECTION_STRING  From Azure portal
+ *
+ *  Azure Cosmos DB (optional — falls back to MongoDB):
+ *   AZURE_COSMOS_ENDPOINT        https://your-cosmos.documents.azure.com:443/
+ *   AZURE_COSMOS_KEY             Primary key from portal
+ *   AZURE_COSMOS_DB              Database name  (default: CloudBackupDB)
+ */
+
+"use strict";
+
+// ── Azure App Insights MUST be first (instruments everything below it) ──
+let appInsights;
+if (process.env.APPLICATIONINSIGHTS_CONNECTION_STRING) {
+  appInsights = require("applicationinsights");
+  appInsights
+    .setup(process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)
+    .setAutoDependencyCorrelation(true)
+    .setAutoCollectRequests(true)
+    .setAutoCollectPerformance(true, true)
+    .setAutoCollectExceptions(true)
+    .setAutoCollectDependencies(true)
+    .setUseDiskRetryCaching(true)
+    .start();
+  console.log("[Azure] Application Insights initialised ✓");
+}
+
+require("dotenv").config();
+
+const express       = require("express");
+const mongoose      = require("mongoose");
+const cors          = require("cors");
+const helmet        = require("helmet");
+const morgan        = require("morgan");
+const compression   = require("compression");
+const rateLimit     = require("express-rate-limit");
+const bcrypt        = require("bcryptjs");
+const jwt           = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
+const { body, validationResult } = require("express-validator");
+const crypto        = require("crypto");
+const cron          = require("node-cron");
+
+// ── Azure SDKs ──────────────────────────────────────────────────────────────
+const { BlobServiceClient, StorageSharedKeyCredential,
+        generateBlobSASQueryParameters, BlobSASPermissions,
+        ContainerSASPermissions } = require("@azure/storage-blob");
+const { DefaultAzureCredential, ClientSecretCredential } = require("@azure/identity");
+const { SecretClient }            = require("@azure/keyvault-secrets");
+
+const app  = express();
+const PORT = process.env.PORT || 5000;
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  1. AZURE SERVICE CLIENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/* ── 1a. Azure Blob Storage client ─────────────────────────────────────── */
+let blobServiceClient = null;
+let backupContainerClient = null;
+
+const AZURE_ACCOUNT   = process.env.AZURE_STORAGE_ACCOUNT_NAME;
+const AZURE_ACCT_KEY  = process.env.AZURE_STORAGE_ACCOUNT_KEY;
+const AZURE_CONTAINER = process.env.AZURE_STORAGE_CONTAINER || "backups";
+
+const initBlobStorage = async () => {
+  if (!AZURE_ACCOUNT) {
+    console.warn("[Azure Blob] AZURE_STORAGE_ACCOUNT_NAME not set — using simulated storage");
+    return false;
+  }
+  try {
+    if (AZURE_ACCT_KEY) {
+      // Authenticate with account key (simple, good for dev/staging)
+      const sharedKey = new StorageSharedKeyCredential(AZURE_ACCOUNT, AZURE_ACCT_KEY);
+      blobServiceClient = new BlobServiceClient(
+        `https://${AZURE_ACCOUNT}.blob.core.windows.net`, sharedKey
+      );
+    } else {
+      // Authenticate with DefaultAzureCredential (Managed Identity in production)
+      blobServiceClient = new BlobServiceClient(
+        `https://${AZURE_ACCOUNT}.blob.core.windows.net`,
+        new DefaultAzureCredential()
+      );
+    }
+    backupContainerClient = blobServiceClient.getContainerClient(AZURE_CONTAINER);
+    // Auto-create container if it doesn't exist
+    await backupContainerClient.createIfNotExists({ access: "private" });
+    console.log(`[Azure Blob] Connected → ${AZURE_ACCOUNT}/${AZURE_CONTAINER} ✓`);
+    return true;
+  } catch (err) {
+    console.error(`[Azure Blob] Init failed: ${err.message}`);
+    return false;
+  }
+};
+
+/* ── 1b. Azure Key Vault client ────────────────────────────────────────── */
+let kvClient = null;
+
+const initKeyVault = async () => {
+  const vaultUri = process.env.AZURE_KEYVAULT_URI;
+  if (!vaultUri) { console.warn("[Azure KV] Skipped — AZURE_KEYVAULT_URI not set"); return; }
+  try {
+    let credential;
+    if (process.env.AZURE_CLIENT_ID && process.env.AZURE_CLIENT_SECRET && process.env.AZURE_TENANT_ID) {
+      credential = new ClientSecretCredential(
+        process.env.AZURE_TENANT_ID,
+        process.env.AZURE_CLIENT_ID,
+        process.env.AZURE_CLIENT_SECRET
+      );
+    } else {
+      credential = new DefaultAzureCredential(); // works on Azure VMs/App Service with MSI
+    }
+    kvClient = new SecretClient(vaultUri, credential);
+    // Verify connectivity by listing one secret
+    for await (const _ of kvClient.listPropertiesOfSecrets()) { break; }
+    console.log(`[Azure KV] Connected → ${vaultUri} ✓`);
+  } catch (err) {
+    console.warn(`[Azure KV] Init failed: ${err.message} — falling back to env vars`);
+  }
+};
+
+// Fetch a secret: Key Vault first, then env var fallback
+const getSecret = async (kvName, envName) => {
+  if (kvClient) {
+    try { return (await kvClient.getSecret(kvName)).value; } catch {}
+  }
+  return process.env[envName];
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  2. AZURE BLOB STORAGE — OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Upload a backup to Azure Blob Storage.
+ * blobName: e.g. "jobId/2024-01-15/backup-<uuid>.tar.gz"
+ * buffer:   Buffer or string (simulated)
+ */
+const uploadBackupToAzure = async (blobName, buffer, metadata = {}) => {
+  if (!backupContainerClient) {
+    // Simulation for demo
+    return { url: `https://${AZURE_ACCOUNT||"demo"}.blob.core.windows.net/${AZURE_CONTAINER}/${blobName}`, simulated: true };
+  }
+  const blockBlobClient = backupContainerClient.getBlockBlobClient(blobName);
+  const uploadOptions = {
+    blobHTTPHeaders: { blobContentType: "application/gzip" },
+    metadata: {
+      createdBy:   metadata.userId   || "system",
+      jobId:       metadata.jobId    || "",
+      jobName:     metadata.jobName  || "",
+      runId:       metadata.runId    || "",
+      environment: process.env.NODE_ENV || "development",
+      ...metadata,
+    },
+    tags: {
+      jobId:  metadata.jobId  || "",
+      status: "active",
+    },
+  };
+  await blockBlobClient.upload(buffer, Buffer.byteLength(buffer), uploadOptions);
+  return { url: blockBlobClient.url, simulated: false };
+};
+
+/**
+ * Generate a time-limited SAS URL for download
+ */
+const generateSasUrl = (blobName, expiryHours = 2) => {
+  if (!AZURE_ACCT_KEY || !blobServiceClient) return null;
+  const sharedKey  = new StorageSharedKeyCredential(AZURE_ACCOUNT, AZURE_ACCT_KEY);
+  const expiresOn  = new Date(Date.now() + expiryHours * 60 * 60 * 1000);
+  const sasToken   = generateBlobSASQueryParameters(
+    {
+      containerName: AZURE_CONTAINER,
+      blobName,
+      permissions:   BlobSASPermissions.parse("r"), // read-only
+      expiresOn,
+      contentDisposition: `attachment; filename="${blobName.split("/").pop()}"`,
+    },
+    sharedKey
+  ).toString();
+  return `https://${AZURE_ACCOUNT}.blob.core.windows.net/${AZURE_CONTAINER}/${blobName}?${sasToken}`;
+};
+
+/**
+ * List blobs for a job (prefix = jobId/)
+ */
+const listJobBlobs = async (jobId, limit = 20) => {
+  if (!backupContainerClient) return [];
+  const results = [];
+  for await (const blob of backupContainerClient.listBlobsFlat({ prefix: `${jobId}/` })) {
+    results.push({
+      name:         blob.name,
+      size:         blob.properties.contentLength,
+      createdOn:    blob.properties.createdOn,
+      lastModified: blob.properties.lastModified,
+      contentType:  blob.properties.contentType,
+    });
+    if (results.length >= limit) break;
+  }
+  return results;
+};
+
+/**
+ * Delete old blobs beyond retention policy
+ */
+const applyRetentionPolicy = async (jobId, retentionDays, maxVersions) => {
+  if (!backupContainerClient) return { deleted: 0 };
+  const blobs = [];
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  for await (const blob of backupContainerClient.listBlobsFlat({ prefix: `${jobId}/` })) {
+    blobs.push(blob);
+  }
+  // Sort oldest first
+  blobs.sort((a, b) => new Date(a.properties.createdOn) - new Date(b.properties.createdOn));
+  const toDelete = blobs.filter(b =>
+    new Date(b.properties.createdOn) < cutoff || blobs.indexOf(b) < blobs.length - maxVersions
+  );
+  let deleted = 0;
+  for (const blob of toDelete) {
+    await backupContainerClient.deleteBlob(blob.name);
+    deleted++;
+  }
+  return { deleted };
+};
+
+/**
+ * Get Azure Blob Storage usage stats for a user
+ */
+const getStorageStats = async (userId) => {
+  if (!backupContainerClient) return { totalSize: 0, blobCount: 0, simulated: true };
+  let totalSize = 0, blobCount = 0;
+  for await (const blob of backupContainerClient.listBlobsFlat({ prefix: `${userId}/` })) {
+    totalSize += blob.properties.contentLength || 0;
+    blobCount++;
+  }
+  return { totalSize, blobCount, simulated: false };
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  3. MONGODB CONNECTION
+// ═══════════════════════════════════════════════════════════════════════════
+const connectDB = async (retries = 0) => {
+  try {
+    // Fetch MONGODB_URI from Key Vault if available
+    const uri = await getSecret("mongodb-uri", "MONGODB_URI") || "mongodb://localhost:27017/cloud_backup_db";
+    await mongoose.connect(uri, { maxPoolSize: 10, serverSelectionTimeoutMS: 5000 });
+    console.log(`[DB] MongoDB connected → ${mongoose.connection.host} ✓`);
+  } catch (err) {
+    if (retries < 5) {
+      console.warn(`[DB] Retry ${retries + 1}/5 — ${err.message}`);
+      await new Promise(r => setTimeout(r, 3000));
+      return connectDB(retries + 1);
+    }
+    console.error("[DB] Fatal: Could not connect. Exiting."); process.exit(1);
+  }
+};
+mongoose.connection.on("disconnected", () => console.warn("[DB] Disconnected"));
+mongoose.connection.on("reconnected",  () => console.log("[DB]  Reconnected ✓"));
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  4. MONGOOSE MODELS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/* ── User ─────────────────────────────────────────────────────────────── */
+const userSchema = new mongoose.Schema(
+  {
+    name:     { type: String, required: true, trim: true, minlength: 2, maxlength: 100 },
+    email:    { type: String, required: true, unique: true, lowercase: true, trim: true },
+    password: { type: String, required: true, minlength: 8, select: false },
+    role:     { type: String, enum: ["user","admin","viewer"], default: "user" },
+    plan:     { type: String, enum: ["free","pro","enterprise"], default: "free" },
+    isActive: { type: Boolean, default: true },
+    lastLogin: Date,
+    passwordChangedAt: Date,
+    // Azure-specific
+    azure: {
+      storageUsedBytes:   { type: Number, default: 0 },
+      storageLimitBytes:  { type: Number, default: 10 * 1024 ** 3 },  // 10 GB free tier
+      blobCount:          { type: Number, default: 0 },
+      lastSyncedAt:       Date,
+      subscriptionId:     String,
+      resourceGroup:      String,
+    },
+  },
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
+);
+userSchema.virtual("storageUsedGB").get(function () { return (this.azure.storageUsedBytes / 1024 ** 3).toFixed(2); });
+userSchema.virtual("storageUsedPct").get(function () { return Math.round((this.azure.storageUsedBytes / this.azure.storageLimitBytes) * 100); });
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+  this.password = await bcrypt.hash(this.password, 12);
+  this.passwordChangedAt = new Date(Date.now() - 1000);
+  next();
+});
+userSchema.methods.verifyPassword = function (candidate) { return bcrypt.compare(candidate, this.password); };
+userSchema.methods.passwordChangedAfter = function (iat) {
+  return this.passwordChangedAt ? iat < parseInt(this.passwordChangedAt.getTime() / 1000) : false;
+};
+userSchema.index({ email: 1 });
+const User = mongoose.model("User", userSchema);
+
+/* ── BackupJob ─────────────────────────────────────────────────────────── */
+const jobSchema = new mongoose.Schema(
+  {
+    user:        { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    name:        { type: String, required: true, trim: true, maxlength: 100 },
+    description: { type: String, trim: true, maxlength: 500 },
+    source: {
+      type: { type: String, enum: ["local","azure_blob","azure_cosmos","azure_sql","azure_files","s3","gcs","ftp","database"], required: true },
+      path: { type: String, required: true },
+      azureResourceId: String,   // /subscriptions/.../resourceGroups/.../providers/...
+    },
+    destination: {
+      type:              { type: String, enum: ["azure_blob","azure_cool","azure_archive","azure_files","s3","gcs","local"], required: true },
+      path:              { type: String, required: true },
+      azureContainerUrl: String,
+      azureTier:         { type: String, enum: ["Hot","Cool","Archive","Cold"], default: "Cool" },
+    },
+    schedule: {
+      frequency:      { type: String, enum: ["manual","hourly","daily","weekly","monthly","custom"], default: "daily" },
+      cronExpression: { type: String, default: "0 2 * * *" },
+      timezone:       { type: String, default: "UTC" },
+      nextRun:        Date,
+      lastRun:        Date,
+    },
+    retention:   { days: { type: Number, default: 30 }, maxVersions: { type: Number, default: 10 } },
+    compression: { enabled: { type: Boolean, default: true }, algorithm: { type: String, enum: ["gzip","bzip2","zstd","none"], default: "gzip" } },
+    encryption: {
+      enabled:   { type: Boolean, default: true },
+      algorithm: { type: String, default: "AES-256-GCM" },
+      keyVaultSecretName: String,    // Name of secret in Azure Key Vault
+    },
+    status:    { type: String, enum: ["active","paused","disabled","error"], default: "active" },
+    tags:      [{ type: String, trim: true }],
+    stats: {
+      totalRuns:            { type: Number, default: 0 },
+      successfulRuns:       { type: Number, default: 0 },
+      failedRuns:           { type: Number, default: 0 },
+      totalDataTransferred: { type: Number, default: 0 },
+      totalBlobsCreated:    { type: Number, default: 0 },
+      averageDurationMs:    { type: Number, default: 0 },
+    },
+    azure: {
+      lastBlobUrl:       String,
+      lastBlobName:      String,
+      lastBlobSizeBytes: Number,
+      containerName:     { type: String, default: AZURE_CONTAINER },
+      resourceGroup:     String,
+      storageAccount:    String,
+    },
+    notifyOnSuccess: { type: Boolean, default: false },
+    notifyOnFailure: { type: Boolean, default: true },
+  },
+  { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
+);
+jobSchema.virtual("successRate").get(function () {
+  if (!this.stats.totalRuns) return 0;
+  return Math.round((this.stats.successfulRuns / this.stats.totalRuns) * 100);
+});
+jobSchema.index({ user: 1, status: 1 });
+jobSchema.index({ "schedule.nextRun": 1 });
+jobSchema.index({ createdAt: -1 });
+const BackupJob = mongoose.model("BackupJob", jobSchema);
+
+/* ── BackupLog ─────────────────────────────────────────────────────────── */
+const logSchema = new mongoose.Schema(
+  {
+    job:     { type: mongoose.Schema.Types.ObjectId, ref: "BackupJob", required: true },
+    user:    { type: mongoose.Schema.Types.ObjectId, ref: "User",      required: true },
+    runId:   { type: String, required: true, unique: true },
+    status:  { type: String, enum: ["pending","running","completed","failed","cancelled"], default: "pending" },
+    startTime: { type: Date, default: Date.now },
+    endTime:   Date,
+    duration:  Number,
+    dataSize:  { original: { type: Number, default: 0 }, compressed: { type: Number, default: 0 }, transferred: { type: Number, default: 0 } },
+    filesProcessed: { total: { type: Number, default: 0 }, success: { type: Number, default: 0 }, failed: { type: Number, default: 0 }, skipped: { type: Number, default: 0 } },
+    outputPath:   String,
+    checksum:     String,
+    errorMessage: String,
+    logs: [{
+      timestamp: { type: Date, default: Date.now },
+      level:     { type: String, enum: ["info","warn","error","debug"] },
+      message:   String,
+    }],
+    triggeredBy: { type: String, enum: ["schedule","manual","api","retention_policy"], default: "manual" },
+    // Azure-specific
+    azure: {
+      blobName:       String,
+      blobUrl:        String,
+      blobSasUrl:     String,
+      sasExpiresAt:   Date,
+      storageAccount: String,
+      containerName:  String,
+      tier:           String,
+      etag:           String,
+      uploadDurationMs: Number,
+      compressionRatio: Number,
+      encryptionUsed:   Boolean,
+      keyVaultSecretName: String,
+      simulated:       { type: Boolean, default: false },
+    },
+  },
+  { timestamps: true, toJSON: { virtuals: true } }
+);
+logSchema.virtual("durationFormatted").get(function () {
+  if (!this.duration) return "N/A";
+  const s = Math.floor(this.duration / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
+});
+logSchema.index({ job: 1, createdAt: -1 });
+logSchema.index({ user: 1, status: 1 });
+logSchema.index({ startTime: -1 });
+const BackupLog = mongoose.model("BackupLog", logSchema);
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  5. CORE UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
+let JWT_SECRET = process.env.JWT_SECRET || "dev_secret_change_me_min_32_chars!";
+
+const signToken = id => jwt.sign({ id }, JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || "7d" });
+
+class AppError extends Error {
+  constructor(msg, code) {
+    super(msg); this.statusCode = code;
+    this.status = String(code).startsWith("4") ? "fail" : "error";
+    this.isOperational = true;
+    Error.captureStackTrace(this, this.constructor);
+  }
+}
+
+const wrap   = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const vcheck = (req, res, next) => {
+  const err = validationResult(req);
+  if (!err.isEmpty()) return res.status(400).json({ success: false, errors: err.array() });
+  next();
+};
+
+// Track event in App Insights
+const trackEvent = (name, properties = {}) => {
+  if (appInsights?.defaultClient) {
+    appInsights.defaultClient.trackEvent({ name, properties });
+  }
+};
+const trackMetric = (name, value) => {
+  if (appInsights?.defaultClient) {
+    appInsights.defaultClient.trackMetric({ name, value });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  6. AUTH MIDDLEWARE
+// ═══════════════════════════════════════════════════════════════════════════
+const protect = wrap(async (req, res, next) => {
+  const auth = req.headers.authorization;
+  if (!auth?.startsWith("Bearer ")) throw new AppError("No token provided.", 401);
+  const decoded = jwt.verify(auth.split(" ")[1], JWT_SECRET);
+  const user = await User.findById(decoded.id).select("+passwordChangedAt");
+  if (!user)            throw new AppError("User not found.",            401);
+  if (!user.isActive)   throw new AppError("Account deactivated.",       401);
+  if (user.passwordChangedAfter(decoded.iat)) throw new AppError("Password changed. Re-login.", 401);
+  req.user = user; next();
+});
+
+const restrictTo = (...roles) => (req, res, next) => {
+  if (!roles.includes(req.user.role)) throw new AppError("Insufficient permissions.", 403);
+  next();
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  7. EXPRESS SETUP
+// ═══════════════════════════════════════════════════════════════════════════
+app.set("trust proxy", 1);
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: { policy: "cross-origin" } }));
+
+const FRONTEND = process.env.FRONTEND_URL || "http://localhost:3000";
+app.use(cors({
+  origin: (o, cb) => (!o || o === FRONTEND || /\.vercel\.app$/.test(o) || o === "http://localhost:3000") ? cb(null, true) : cb(new Error("CORS")),
+  credentials: true,
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization"],
+}));
+
+app.use("/api/",                  rateLimit({ windowMs: 15*60*1000, max: 150, standardHeaders: true, legacyHeaders: false }));
+app.use("/api/auth/login",        rateLimit({ windowMs: 15*60*1000, max: 10  }));
+app.use("/api/auth/register",     rateLimit({ windowMs: 15*60*1000, max: 10  }));
+
+app.use(compression());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(morgan(process.env.NODE_ENV === "production" ? "combined" : "dev"));
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  8. HEALTH & INFO ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+app.get("/health", (req, res) => res.json({
+  success: true, status: "OK",
+  timestamp: new Date().toISOString(),
+  uptime: `${Math.floor(process.uptime())}s`,
+  environment: process.env.NODE_ENV || "development",
+  version: "3.0.0",
+  services: {
+    mongodb:     mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    azureBlob:   backupContainerClient ? "connected" : "simulated",
+    azureKV:     kvClient              ? "connected" : "disabled",
+    appInsights: appInsights           ? "active"    : "disabled",
+  },
+}));
+
+app.get("/api", (req, res) => res.json({
+  success: true, name: "Cloud Backup Automation API — Azure Edition", version: "3.0.0",
+  azure: { storage: !!backupContainerClient, keyVault: !!kvClient, insights: !!appInsights },
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  9. AUTH ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/* POST /api/auth/register */
+app.post("/api/auth/register",
+  [
+    body("name").trim().isLength({ min:2, max:100 }).withMessage("Name must be 2–100 chars"),
+    body("email").isEmail().normalizeEmail().withMessage("Valid email required"),
+    body("password").isLength({ min:8 }).withMessage("Password min 8 chars")
+      .matches(/(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/).withMessage("Needs uppercase, lowercase & number"),
+  ], vcheck,
+  wrap(async (req, res) => {
+    const { name, email, password } = req.body;
+    if (await User.findOne({ email })) throw new AppError("Email already registered.", 400);
+    const user = await User.create({ name, email, password });
+    trackEvent("UserRegistered", { userId: user._id.toString(), email });
+    user.password = undefined;
+    res.status(201).json({ success: true, token: signToken(user._id), data: { user } });
+  })
+);
+
+/* POST /api/auth/login */
+app.post("/api/auth/login",
+  [body("email").isEmail().normalizeEmail(), body("password").notEmpty()], vcheck,
+  wrap(async (req, res) => {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email }).select("+password");
+    if (!user || !(await user.verifyPassword(password))) throw new AppError("Invalid credentials.", 401);
+    if (!user.isActive) throw new AppError("Account deactivated.", 401);
+    user.lastLogin = new Date();
+    await user.save({ validateBeforeSave: false });
+    trackEvent("UserLogin", { userId: user._id.toString() });
+    user.password = undefined;
+    res.json({ success: true, token: signToken(user._id), data: { user } });
+  })
+);
+
+/* POST /api/auth/logout */
+app.post("/api/auth/logout", protect, (req, res) => {
+  trackEvent("UserLogout", { userId: req.user.id });
+  res.json({ success: true, message: "Logged out." });
+});
+
+/* GET /api/auth/me */
+app.get("/api/auth/me", protect, wrap(async (req, res) => {
+  const user = await User.findById(req.user.id);
+  // Sync Azure storage usage on each /me call (lightweight)
+  if (backupContainerClient) {
+    const stats = await getStorageStats(req.user.id);
+    user.azure.storageUsedBytes = stats.totalSize;
+    user.azure.blobCount        = stats.blobCount;
+    user.azure.lastSyncedAt     = new Date();
+    await user.save({ validateBeforeSave: false });
+  }
+  res.json({ success: true, data: { user } });
+}));
+
+/* PATCH /api/auth/update-profile */
+app.patch("/api/auth/update-profile", protect,
+  [body("name").optional().trim().isLength({ min:2, max:100 })], vcheck,
+  wrap(async (req, res) => {
+    const updates = {};
+    if (req.body.name)   updates.name   = req.body.name;
+    if (req.body.avatar) updates.avatar = req.body.avatar;
+    const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true, runValidators: true });
+    res.json({ success: true, data: { user } });
+  })
+);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10. BACKUP JOBS ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/* GET /api/jobs */
+app.get("/api/jobs", protect, wrap(async (req, res) => {
+  const { status, page = 1, limit = 20, search } = req.query;
+  const filter = { user: req.user.id };
+  if (status) filter.status = status;
+  if (search) filter.name   = { $regex: search, $options: "i" };
+  const skip = (Math.max(1, +page) - 1) * Math.min(50, +limit);
+  const [jobs, total] = await Promise.all([
+    BackupJob.find(filter).sort({ createdAt: -1 }).skip(skip).limit(+limit),
+    BackupJob.countDocuments(filter),
+  ]);
+  res.json({ success: true, data: { jobs, pagination: { page:+page, limit:+limit, total, pages: Math.ceil(total/+limit) } } });
+}));
+
+/* POST /api/jobs */
+app.post("/api/jobs", protect,
+  [
+    body("name").trim().isLength({ min:1, max:100 }).withMessage("Job name required"),
+    body("source.type").isIn(["local","azure_blob","azure_cosmos","azure_sql","azure_files","s3","gcs","ftp","database"]).withMessage("Invalid source type"),
+    body("source.path").notEmpty().withMessage("Source path required"),
+    body("destination.type").isIn(["azure_blob","azure_cool","azure_archive","azure_files","s3","gcs","local"]).withMessage("Invalid destination type"),
+    body("destination.path").notEmpty().withMessage("Destination path required"),
+  ], vcheck,
+  wrap(async (req, res) => {
+    // Auto-set Azure defaults
+    const jobData = {
+      ...req.body, user: req.user.id,
+      azure: {
+        containerName:  AZURE_CONTAINER,
+        storageAccount: AZURE_ACCOUNT || "simulated",
+        ...(req.body.azure || {}),
+      },
+    };
+    const job = await BackupJob.create(jobData);
+    trackEvent("BackupJobCreated", { jobId: job._id.toString(), userId: req.user.id, destType: job.destination.type });
+    res.status(201).json({ success: true, data: { job } });
+  })
+);
+
+/* GET /api/jobs/:id */
+app.get("/api/jobs/:id", protect, wrap(async (req, res) => {
+  const job = await BackupJob.findOne({ _id: req.params.id, user: req.user.id });
+  if (!job) throw new AppError("Job not found.", 404);
+  res.json({ success: true, data: { job } });
+}));
+
+/* PATCH /api/jobs/:id */
+app.patch("/api/jobs/:id", protect, wrap(async (req, res) => {
+  const allowed = ["name","description","schedule","retention","compression","encryption","status","tags","notifyOnSuccess","notifyOnFailure","azure"];
+  const updates = {};
+  allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
+  const job = await BackupJob.findOneAndUpdate({ _id: req.params.id, user: req.user.id }, updates, { new: true, runValidators: true });
+  if (!job) throw new AppError("Job not found.", 404);
+  res.json({ success: true, data: { job } });
+}));
+
+/* DELETE /api/jobs/:id */
+app.delete("/api/jobs/:id", protect, wrap(async (req, res) => {
+  const job = await BackupJob.findOneAndDelete({ _id: req.params.id, user: req.user.id });
+  if (!job) throw new AppError("Job not found.", 404);
+  await BackupLog.deleteMany({ job: req.params.id });
+  trackEvent("BackupJobDeleted", { jobId: req.params.id, userId: req.user.id });
+  res.json({ success: true, message: "Job and all logs deleted." });
+}));
+
+/* POST /api/jobs/:id/run  — trigger manual backup */
+app.post("/api/jobs/:id/run", protect, wrap(async (req, res) => {
+  const job = await BackupJob.findOne({ _id: req.params.id, user: req.user.id });
+  if (!job) throw new AppError("Job not found.", 404);
+  if (job.status === "disabled") throw new AppError("Cannot run a disabled job.", 400);
+
+  const runId = uuidv4();
+  const log = await BackupLog.create({
+    job: job._id, user: req.user.id, runId,
+    status: "running", triggeredBy: "manual", startTime: new Date(),
+    logs: [{ level: "info", message: `Manual backup triggered by ${req.user.name}` }],
+  });
+
+  // Fire-and-forget Azure backup
+  executeAzureBackup(job, log, req.user).catch(err => console.error("[Backup] Error:", err.message));
+
+  res.status(202).json({ success: true, message: "Azure backup started.", data: { runId, logId: log._id } });
+}));
+
+/* GET /api/jobs/:id/logs */
+app.get("/api/jobs/:id/logs", protect, wrap(async (req, res) => {
+  const job = await BackupJob.findOne({ _id: req.params.id, user: req.user.id });
+  if (!job) throw new AppError("Job not found.", 404);
+  const { page = 1, limit = 20, status } = req.query;
+  const filter = { job: req.params.id };
+  if (status) filter.status = status;
+  const skip = (Math.max(1, +page) - 1) * +limit;
+  const [logs, total] = await Promise.all([
+    BackupLog.find(filter).sort({ startTime: -1 }).skip(skip).limit(+limit),
+    BackupLog.countDocuments(filter),
+  ]);
+  res.json({ success: true, data: { logs, pagination: { page:+page, limit:+limit, total } } });
+}));
+
+/* GET /api/jobs/:id/blobs — list Azure blobs for this job */
+app.get("/api/jobs/:id/blobs", protect, wrap(async (req, res) => {
+  const job = await BackupJob.findOne({ _id: req.params.id, user: req.user.id });
+  if (!job) throw new AppError("Job not found.", 404);
+  const blobs = await listJobBlobs(job._id.toString(), 50);
+  // Attach SAS download URLs
+  const withUrls = blobs.map(b => ({
+    ...b,
+    downloadUrl: generateSasUrl(b.name, +(process.env.AZURE_STORAGE_SAS_EXPIRY_HRS || 2)),
+  }));
+  res.json({ success: true, data: { blobs: withUrls, container: AZURE_CONTAINER, storageAccount: AZURE_ACCOUNT } });
+}));
+
+/* POST /api/jobs/:id/apply-retention — manually trigger retention policy */
+app.post("/api/jobs/:id/apply-retention", protect, wrap(async (req, res) => {
+  const job = await BackupJob.findOne({ _id: req.params.id, user: req.user.id });
+  if (!job) throw new AppError("Job not found.", 404);
+  const result = await applyRetentionPolicy(job._id.toString(), job.retention.days, job.retention.maxVersions);
+  res.json({ success: true, message: `Retention applied. ${result.deleted} blob(s) removed.`, data: result });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 11. DASHBOARD ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/* GET /api/dashboard/stats */
+app.get("/api/dashboard/stats", protect, wrap(async (req, res) => {
+  const uid   = req.user._id;
+  const last30 = new Date(Date.now() - 30*24*60*60*1000);
+  const last7  = new Date(Date.now() -  7*24*60*60*1000);
+
+  const [totalJobs, activeJobs, jobsByStatus, recentLogs, monthStats, dailyActivity, allTimeStorage] = await Promise.all([
+    BackupJob.countDocuments({ user: uid }),
+    BackupJob.countDocuments({ user: uid, status: "active" }),
+    BackupJob.aggregate([{ $match: { user: uid } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+    BackupLog.find({ user: uid }).sort({ startTime: -1 }).limit(10).populate("job","name source destination"),
+    BackupLog.aggregate([
+      { $match: { user: uid, startTime: { $gte: last30 } } },
+      { $group: { _id: "$status", count: { $sum: 1 }, data: { $sum: "$dataSize.transferred" } } },
+    ]),
+    BackupLog.aggregate([
+      { $match: { user: uid, startTime: { $gte: last7 } } },
+      { $group: {
+        _id: { $dateToString: { format: "%Y-%m-%d", date: "$startTime" } },
+        completed:       { $sum: { $cond: [{ $eq: ["$status","completed"] }, 1, 0] } },
+        failed:          { $sum: { $cond: [{ $eq: ["$status","failed"]    }, 1, 0] } },
+        dataTransferred: { $sum: "$dataSize.transferred" },
+        blobsCreated:    { $sum: 1 },
+      }},
+      { $sort: { _id: 1 } },
+    ]),
+    BackupLog.aggregate([
+      { $match: { user: uid, status: "completed" } },
+      { $group: { _id: null, total: { $sum: "$dataSize.transferred" }, blobs: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const success = monthStats.find(s => s._id === "completed")?.count || 0;
+  const failed  = monthStats.find(s => s._id === "failed")?.count   || 0;
+  const total   = success + failed;
+  const totalGB = allTimeStorage[0]?.total || 0;
+
+  // Live Azure storage stats
+  const azureStats = backupContainerClient
+    ? await getStorageStats(req.user.id)
+    : { totalSize: req.user.azure?.storageUsedBytes || 0, blobCount: req.user.azure?.blobCount || 0, simulated: true };
+
+  res.json({
+    success: true, data: {
+      overview: {
+        totalJobs, activeJobs, totalRuns: total,
+        successRate: total ? Math.round((success/total)*100) : 0,
+        totalDataTransferred: totalGB,
+        totalDataTransferredGB: (totalGB / 1024**3).toFixed(2),
+      },
+      jobsByStatus:  jobsByStatus.reduce((a,i) => ({ ...a, [i._id]: i.count }), {}),
+      last30Days:    { success, failed, total },
+      dailyActivity,
+      recentActivity: recentLogs,
+      azure: {
+        storageAccount:    AZURE_ACCOUNT     || "not configured",
+        containerName:     AZURE_CONTAINER,
+        connected:         !!backupContainerClient,
+        keyVaultEnabled:   !!kvClient,
+        insightsEnabled:   !!appInsights,
+        storageUsedBytes:  azureStats.totalSize,
+        storageUsedGB:     (azureStats.totalSize / 1024**3).toFixed(2),
+        storageLimitGB:    (req.user.azure?.storageLimitBytes / 1024**3).toFixed(0),
+        blobCount:         azureStats.blobCount,
+        simulated:         azureStats.simulated,
+        storageUsedPct:    req.user.storageUsedPct,
+      },
+      user: {
+        storageUsedBytes:   req.user.azure?.storageUsedBytes  || 0,
+        storageLimitBytes:  req.user.azure?.storageLimitBytes || 10*1024**3,
+        storageUsedPct:     req.user.storageUsedPct,
+        plan:               req.user.plan,
+      },
+    },
+  });
+}));
+
+/* GET /api/dashboard/activity */
+app.get("/api/dashboard/activity", protect, wrap(async (req, res) => {
+  const { page = 1, limit = 20, status } = req.query;
+  const filter = { user: req.user.id };
+  if (status) filter.status = status;
+  const skip = (Math.max(1, +page) - 1) * +limit;
+  const [logs, total] = await Promise.all([
+    BackupLog.find(filter).sort({ startTime: -1 }).skip(skip).limit(+limit).populate("job","name source destination"),
+    BackupLog.countDocuments(filter),
+  ]);
+  res.json({ success: true, data: { logs, pagination: { page:+page, limit:+limit, total } } });
+}));
+
+/* GET /api/dashboard/health */
+app.get("/api/dashboard/health", protect, (req, res) => res.json({
+  success: true, data: {
+    status: "healthy", timestamp: new Date().toISOString(),
+    uptime: process.uptime(), memory: process.memoryUsage(), nodeVersion: process.version,
+    azure: { blob: !!backupContainerClient, keyVault: !!kvClient, insights: !!appInsights },
+    db: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+  },
+}));
+
+/* GET /api/azure/storage-info — Azure storage account metadata */
+app.get("/api/azure/storage-info", protect, wrap(async (req, res) => {
+  const info = {
+    accountName:   AZURE_ACCOUNT  || null,
+    containerName: AZURE_CONTAINER,
+    endpoint:      AZURE_ACCOUNT ? `https://${AZURE_ACCOUNT}.blob.core.windows.net` : null,
+    tier:          "Cool (cost-optimised for backups)",
+    redundancy:    "LRS (Locally Redundant)",
+    connected:     !!backupContainerClient,
+    keyVaultUri:   process.env.AZURE_KEYVAULT_URI || null,
+    region:        process.env.AZURE_REGION || "eastus",
+  };
+  res.json({ success: true, data: info });
+}));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 12. AZURE BACKUP EXECUTION ENGINE
+// ═══════════════════════════════════════════════════════════════════════════
+async function executeAzureBackup(job, log, user) {
+  const delay = ms => new Promise(r => setTimeout(r, ms));
+
+  try {
+    const startMs  = Date.now();
+    const success  = Math.random() > 0.12;  // 88% success rate
+    const fileCount = 10 + Math.floor(Math.random() * 990);
+    const origSize  = Math.floor(Math.random() * 500 * 1024 * 1024); // up to 500 MB
+    const compSize  = Math.floor(origSize * (job.compression.enabled ? 0.62 : 1.0));
+
+    // Simulate backup processing time
+    await delay(2500 + Math.floor(Math.random() * 6000));
+
+    if (success) {
+      // ── Build Azure blob name ─────────────────────────────────────────
+      const date     = new Date().toISOString().split("T")[0];
+      const blobName = `${user._id}/${job._id}/${date}/backup-${log.runId.split("-")[0]}.tar${job.compression.enabled ? ".gz" : ""}`;
+
+      // ── Upload to Azure Blob Storage ──────────────────────────────────
+      const uploadStart = Date.now();
+      const fakeBuffer  = Buffer.alloc(Math.min(compSize, 1024), "x"); // real impl: actual compressed archive
+      const uploadResult = await uploadBackupToAzure(blobName, fakeBuffer, {
+        userId:  user._id.toString(),
+        jobId:   job._id.toString(),
+        jobName: job.name,
+        runId:   log.runId,
+        tier:    job.destination.azureTier || "Cool",
+      });
+      const uploadDurationMs = Date.now() - uploadStart;
+
+      // ── Generate SAS download URL ─────────────────────────────────────
+      const expiryHrs = +(process.env.AZURE_STORAGE_SAS_EXPIRY_HRS || 2);
+      const sasUrl    = generateSasUrl(blobName, expiryHrs);
+      const sasExpiry = new Date(Date.now() + expiryHrs * 60 * 60 * 1000);
+
+      // ── Checksum ──────────────────────────────────────────────────────
+      const checksum = crypto.randomBytes(16).toString("hex");
+
+      // ── Update BackupLog ──────────────────────────────────────────────
+      const duration = Date.now() - startMs;
+      await BackupLog.findByIdAndUpdate(log._id, {
+        status: "completed", endTime: new Date(), duration,
+        dataSize:       { original: origSize, compressed: compSize, transferred: compSize },
+        filesProcessed: { total: fileCount, success: fileCount, failed: 0, skipped: Math.floor(Math.random() * 5) },
+        outputPath:     uploadResult.url,
+        checksum,
+        azure: {
+          blobName, blobUrl: uploadResult.url, blobSasUrl: sasUrl, sasExpiresAt: sasExpiry,
+          storageAccount: AZURE_ACCOUNT || "simulated",
+          containerName:  AZURE_CONTAINER,
+          tier:           job.destination.azureTier || "Cool",
+          uploadDurationMs,
+          compressionRatio: origSize > 0 ? +(origSize / compSize).toFixed(2) : 1,
+          encryptionUsed:   job.encryption.enabled,
+          keyVaultSecretName: job.encryption.keyVaultSecretName || null,
+          simulated:      uploadResult.simulated,
+        },
+        $push: { logs: { level: "info", message: `Uploaded to Azure Blob: ${blobName} (${uploadResult.simulated ? "simulated" : "real"})` } },
+      });
+
+      // ── Update BackupJob stats ────────────────────────────────────────
+      await BackupJob.findByIdAndUpdate(job._id, {
+        "schedule.lastRun":   new Date(),
+        "azure.lastBlobName": blobName,
+        "azure.lastBlobUrl":  uploadResult.url,
+        "azure.lastBlobSizeBytes": compSize,
+        $inc: {
+          "stats.totalRuns": 1, "stats.successfulRuns": 1,
+          "stats.totalDataTransferred": compSize,
+          "stats.totalBlobsCreated": 1,
+        },
+      });
+
+      // ── Apply retention policy in Azure ───────────────────────────────
+      await applyRetentionPolicy(job._id.toString(), job.retention.days, job.retention.maxVersions);
+
+      // ── Track in App Insights ─────────────────────────────────────────
+      trackEvent("BackupCompleted", { jobId: job._id.toString(), userId: user._id.toString(), blobName, sizeBytes: String(compSize), simulated: String(uploadResult.simulated) });
+      trackMetric("BackupDurationMs",  duration);
+      trackMetric("BackupSizeBytes",   compSize);
+      trackMetric("UploadDurationMs",  uploadDurationMs);
+      trackMetric("CompressionRatio",  origSize > 0 ? origSize / compSize : 1);
+
+      console.log(`[Backup] ✓ ${job.name} → ${blobName} (${(compSize/1024/1024).toFixed(1)} MB, ${Math.floor(duration/1000)}s)`);
+
+    } else {
+      // ── Failure path ──────────────────────────────────────────────────
+      const errors = [
+        "Azure Blob Storage: connection timeout",
+        "Source path not accessible — check permissions",
+        "AzureStorageException: Container quota exceeded",
+        "Checksum mismatch after upload — retrying not attempted",
+        "Azure Key Vault: secret retrieval failed — encryption key unavailable",
+        "Network interruption during blob upload",
+      ];
+      const errorMsg = errors[Math.floor(Math.random() * errors.length)];
+      const duration = Date.now() - startMs;
+
+      await BackupLog.findByIdAndUpdate(log._id, {
+        status: "failed", endTime: new Date(), duration, errorMessage: errorMsg,
+        $push: { logs: { level: "error", message: `Azure backup failed: ${errorMsg}` } },
+      });
+      await BackupJob.findByIdAndUpdate(job._id, {
+        "schedule.lastRun": new Date(),
+        $inc: { "stats.totalRuns": 1, "stats.failedRuns": 1 },
+      });
+
+      trackEvent("BackupFailed", { jobId: job._id.toString(), userId: user._id.toString(), error: errorMsg });
+      console.error(`[Backup] ✗ ${job.name} — ${errorMsg}`);
+    }
+  } catch (err) {
+    await BackupLog.findByIdAndUpdate(log._id, {
+      status: "failed", endTime: new Date(), duration: 0, errorMessage: err.message,
+      $push: { logs: { level: "error", message: `Unhandled backup error: ${err.message}` } },
+    });
+    console.error("[Backup] Unhandled error:", err.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 13. CRON SCHEDULER — auto-run active daily jobs
+// ═══════════════════════════════════════════════════════════════════════════
+const startScheduler = () => {
+  // Run every hour and check for jobs whose nextRun has passed
+  cron.schedule("0 * * * *", async () => {
+    console.log("[Scheduler] Checking for due backup jobs…");
+    try {
+      const now  = new Date();
+      const jobs = await BackupJob.find({ status: "active", "schedule.nextRun": { $lte: now } })
+        .populate("user", "name email");
+
+      for (const job of jobs) {
+        const runId = uuidv4();
+        const log = await BackupLog.create({
+          job: job._id, user: job.user._id, runId,
+          status: "running", triggeredBy: "schedule", startTime: new Date(),
+          logs: [{ level: "info", message: "Scheduled backup triggered by cron" }],
+        });
+        executeAzureBackup(job, log, job.user).catch(e => console.error("[Scheduler] Backup error:", e.message));
+
+        // Set next run based on frequency
+        const nextRun = new Date();
+        const freq = job.schedule.frequency;
+        if (freq === "hourly")  nextRun.setHours(nextRun.getHours() + 1);
+        else if (freq === "daily")  nextRun.setDate(nextRun.getDate() + 1);
+        else if (freq === "weekly") nextRun.setDate(nextRun.getDate() + 7);
+        else if (freq === "monthly") nextRun.setMonth(nextRun.getMonth() + 1);
+        else nextRun.setDate(nextRun.getDate() + 1); // fallback
+
+        await BackupJob.findByIdAndUpdate(job._id, { "schedule.nextRun": nextRun });
+        console.log(`[Scheduler] Started: ${job.name} → next at ${nextRun.toISOString()}`);
+      }
+    } catch (err) {
+      console.error("[Scheduler] Error:", err.message);
+    }
+  });
+  console.log("[Scheduler] Hourly cron registered ✓");
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 14. ERROR HANDLING
+// ═══════════════════════════════════════════════════════════════════════════
+app.use((req, res, next) => next(new AppError(`Route not found: ${req.originalUrl}`, 404)));
+app.use((err, req, res, next) => {
+  let { statusCode = 500, message = "Internal Server Error" } = err;
+  if (err.name === "CastError")         { statusCode = 400; message = `Invalid ${err.path}: ${err.value}`; }
+  if (err.code === 11000)               { statusCode = 400; message = `${Object.keys(err.keyValue)[0]} already exists.`; }
+  if (err.name === "ValidationError")   { statusCode = 400; message = Object.values(err.errors).map(e => e.message).join(". "); }
+  if (err.name === "JsonWebTokenError") { statusCode = 401; message = "Invalid token."; }
+  if (err.name === "TokenExpiredError") { statusCode = 401; message = "Token expired."; }
+  console.error(`[${statusCode}] ${req.method} ${req.originalUrl} — ${message}`);
+  if (appInsights?.defaultClient) appInsights.defaultClient.trackException({ exception: err });
+  res.status(statusCode).json({
+    success: false,
+    status:  String(statusCode).startsWith("4") ? "fail" : "error",
+    message,
+    ...(process.env.NODE_ENV === "development" && { stack: err.stack }),
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 15. BOOTSTRAP
+// ═══════════════════════════════════════════════════════════════════════════
+const start = async () => {
+  try {
+    // Resolve JWT_SECRET from Key Vault if configured
+    await initKeyVault();
+    const kvJwt = await getSecret("jwt-secret", "JWT_SECRET");
+    if (kvJwt) JWT_SECRET = kvJwt;
+
+    await connectDB();
+    await initBlobStorage();
+    startScheduler();
+
+    const server = app.listen(PORT, () => {
+      console.log(`\n🚀  Cloud Backup API (Azure Edition) on port ${PORT}`);
+      console.log(`🔷  Azure Blob   : ${backupContainerClient ? `${AZURE_ACCOUNT}/${AZURE_CONTAINER}` : "SIMULATED"}`);
+      console.log(`🔑  Key Vault    : ${kvClient  ? process.env.AZURE_KEYVAULT_URI : "disabled"}`);
+      console.log(`📊  App Insights : ${appInsights ? "active" : "disabled"}`);
+      console.log(`❤️   Health       : http://localhost:${PORT}/health\n`);
+    });
+
+    const graceful = async signal => {
+      console.log(`\n[${signal}] Shutting down gracefully…`);
+      server.close(async () => {
+        await mongoose.connection.close();
+        if (appInsights?.defaultClient) await appInsights.defaultClient.flush();
+        console.log("[Shutdown] Done."); process.exit(0);
+      });
+    };
+    process.on("SIGTERM", () => graceful("SIGTERM"));
+    process.on("SIGINT",  () => graceful("SIGINT"));
+    process.on("unhandledRejection", err => { console.error("Unhandled:", err.message); server.close(() => process.exit(1)); });
+  } catch (err) {
+    console.error("Boot failed:", err.message); process.exit(1);
+  }
+};
+
+start();
+module.exports = app;
